@@ -1,0 +1,35 @@
+name: VN30F1M Scanner
+
+on:
+  # Run Mon-Fri at 02:00 UTC (= 09:00 Vietnam time)
+  schedule:
+    - cron: '0 2 * * 1-5'
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max (covers 9:00-14:30 = 5.5h)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DNSE_API_KEY: ${{ secrets.DNSE_API_KEY }}
+          DNSE_API_SECRET: ${{ secrets.DNSE_API_SECRET }}
+        run: |
+          # Run until market close (5.5 hours = 19800 seconds + buffer)
+          timeout 20000 python scanner.py --interval 30 || true
