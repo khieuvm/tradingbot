@@ -1,13 +1,15 @@
 """
 Multi-Timeframe Signal Scanner
 ================================
-Runs every 30 seconds. Scans VN30F1M on 1m, 5m, 15m timeframes.
-Sends Telegram alert when signal fires on any timeframe.
+Strategy:
+  1. Scan 5m + 15m for signal direction (BUY/SELL)
+  2. Use 1m to find optimal Limit Order entry via ATR pullback
+  3. Runs every 60s (one 1m candle)
 
 Usage:
     py scanner.py
-    py scanner.py --once        (run once, no loop)
-    py scanner.py --interval 60 (custom interval in seconds)
+    py scanner.py --once
+    py scanner.py --interval 60 --combo "K: Smart Mean Reversion"
 """
 
 import sys
@@ -27,42 +29,24 @@ from src.notifier import TelegramNotifier
 
 # ─── CONFIG ───────────────────────────────────────────────
 SYMBOL = "VN30F1M"
-TIMEFRAMES = ["1m", "5m", "15m"]
-COMBO = "D: Trend Confirmation (safest)"  # default combo preset
-SCAN_INTERVAL = 30  # seconds
+SIGNAL_TIMEFRAMES = ["5m", "15m"]  # Signal detection
+ENTRY_TIMEFRAME = "1m"             # Entry timing
+COMBO = "D: Trend Confirmation (safest)"
+SCAN_INTERVAL = 60  # seconds (= 1 candle on 1m)
 
 # Vietnam timezone (UTC+7)
 VN_TZ = timezone(timedelta(hours=7))
 
-# Trading hours (Vietnam market: Mon-Fri 9:00-14:30, lunch break 11:30-13:00)
-MARKET_OPEN = (9, 0)      # 09:00
-LUNCH_START = (11, 30)    # 11:30
-LUNCH_END = (13, 0)       # 13:00
-MARKET_CLOSE = (14, 30)   # 14:30
+# Trading hours (Vietnam market: Mon-Fri 9:00-14:30)
+MARKET_OPEN = (9, 0)
+MARKET_CLOSE = (14, 30)
 
+# ATR-based Limit Order parameters
+ENTRY_ATR_PULLBACK = 0.5   # Entry = price ± 0.5*ATR (pullback from current)
+SL_ATR_MULT = 1.5          # Stop Loss = entry ± 1.5*ATR
+TP_ATR_MULT = 3.0          # Take Profit = entry ± 3.0*ATR
 
-def vn_now() -> datetime:
-    """Get current time in Vietnam timezone."""
-    return datetime.now(VN_TZ)
-
-
-def is_trading_hours() -> bool:
-    """Check if current time is within VN30F trading hours (Mon-Fri 9:00-14:30, skip lunch 11:30-13:00)."""
-    now = vn_now()
-    # Weekend check (Saturday=5, Sunday=6)
-    if now.weekday() >= 5:
-        return False
-    current = (now.hour, now.minute)
-    # Outside market hours
-    if current < MARKET_OPEN or current > MARKET_CLOSE:
-        return False
-    # Lunch break (futures still trades but less liquid — optional skip)
-    # Uncomment next line to skip lunch break:
-    # if LUNCH_START <= current < LUNCH_END:
-    #     return False
-    return True
-
-# Signal parameters (same as web.py defaults)
+# Signal parameters
 PARAMS = {
     "fast_ma": 10,
     "slow_ma": 20,
@@ -76,6 +60,20 @@ PARAMS = {
 }
 
 
+def vn_now() -> datetime:
+    """Get current time in Vietnam timezone."""
+    return datetime.now(VN_TZ)
+
+
+def is_trading_hours() -> bool:
+    """Check if current time is within VN30F trading hours (Mon-Fri 9:00-14:30)."""
+    now = vn_now()
+    if now.weekday() >= 5:
+        return False
+    current = (now.hour, now.minute)
+    return MARKET_OPEN <= current <= MARKET_CLOSE
+
+
 def get_enabled_from_combo(combo_name: str) -> dict:
     """Build enabled dict from a combo preset."""
     preset = COMBO_PRESETS.get(combo_name, {})
@@ -87,8 +85,7 @@ def get_enabled_from_combo(combo_name: str) -> dict:
 
 def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
                    enabled: dict, combo_name: str) -> dict | None:
-    """Scan a single timeframe. Returns signal info dict or None."""
-    # Calculate date range based on interval
+    """Scan a single timeframe for signal. Returns signal info or None."""
     now = vn_now()
     if interval in ("1m", "5m"):
         days_back = 5
@@ -103,49 +100,33 @@ def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
     try:
         df = fetcher.get_futures_ohlcv(symbol, start, end, interval=interval)
     except Exception as e:
-        print(f"  [{interval}] Error fetching data: {e}")
+        print(f"  [{interval}] Error: {e}")
         return None
 
     if df is None or df.empty or len(df) < 30:
         print(f"  [{interval}] Insufficient data ({len(df) if df is not None else 0} bars)")
         return None
 
-    # Generate signals
     sig_df = generate_combined_signals(
         df, **PARAMS, enabled=enabled, combo_mode=combo_name,
     )
 
-    # Check last bar
     last = sig_df.iloc[-1]
     signal = int(last.get("signal", 0))
 
     if signal == 0:
         return None
 
-    # Collect fired conditions
     prefix = "_b_" if signal == 1 else "_s_"
     fired = [COND_LABELS.get(k, k) for k in ALL_COND_KEYS
              if last.get(f"{prefix}{k}", 0) == 1]
 
-    price = float(last["close"])
-    atr = float(last.get("atr", 0))
-    confidence = int(last.get("signal_confidence", 0))
-
-    if signal == 1:
-        sl = price - 1.5 * atr
-        tp = price + 3.0 * atr
-    else:
-        sl = price + 1.5 * atr
-        tp = price - 3.0 * atr
-
     return {
         "interval": interval,
         "signal": "BUY" if signal == 1 else "SELL",
-        "price": price,
-        "sl": sl,
-        "tp": tp,
-        "atr": atr,
-        "confidence": confidence,
+        "price": float(last["close"]),
+        "atr": float(last.get("atr", 0)),
+        "confidence": int(last.get("signal_confidence", 0)),
         "conditions": fired,
         "rsi": float(last.get("rsi", 0)),
         "ema_slope": float(last.get("ema_slope", 0)),
@@ -154,86 +135,149 @@ def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
     }
 
 
+def get_1m_entry(fetcher: DataFetcher, symbol: str, direction: str) -> dict | None:
+    """Use 1m chart to find optimal Limit Order entry based on ATR pullback.
+
+    For BUY: Limit = current_price - pullback (buy the dip)
+    For SELL: Limit = current_price + pullback (sell the rally)
+    """
+    now = vn_now()
+    start = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+    end = now.strftime("%Y-%m-%d")
+
+    try:
+        df = fetcher.get_futures_ohlcv(symbol, start, end, interval="1m")
+    except Exception as e:
+        print(f"  [1m entry] Error: {e}")
+        return None
+
+    if df is None or df.empty or len(df) < 30:
+        return None
+
+    # Calculate ATR on 1m
+    import pandas_ta as ta
+    df["atr_1m"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+
+    last = df.iloc[-1]
+    price = float(last["close"])
+    atr_1m = float(last["atr_1m"]) if pd.notna(last.get("atr_1m")) else 0
+
+    if atr_1m <= 0:
+        return None
+
+    # Recent support/resistance from last 20 bars
+    recent = df.tail(20)
+    recent_low = float(recent["low"].min())
+    recent_high = float(recent["high"].max())
+
+    pullback = atr_1m * ENTRY_ATR_PULLBACK
+
+    if direction == "BUY":
+        # Limit buy below current price (at pullback level)
+        limit_price = price - pullback
+        # Don't place below recent support (too aggressive)
+        limit_price = max(limit_price, recent_low)
+        sl = limit_price - SL_ATR_MULT * atr_1m
+        tp = limit_price + TP_ATR_MULT * atr_1m
+    else:  # SELL
+        # Limit sell above current price (at rally level)
+        limit_price = price + pullback
+        # Don't place above recent resistance
+        limit_price = min(limit_price, recent_high)
+        sl = limit_price + SL_ATR_MULT * atr_1m
+        tp = limit_price - TP_ATR_MULT * atr_1m
+
+    rr_ratio = abs(tp - limit_price) / abs(sl - limit_price) if abs(sl - limit_price) > 0 else 0
+
+    return {
+        "current_price": price,
+        "limit_price": limit_price,
+        "sl": sl,
+        "tp": tp,
+        "atr_1m": atr_1m,
+        "rr_ratio": rr_ratio,
+        "recent_low": recent_low,
+        "recent_high": recent_high,
+        "distance_pct": abs(limit_price - price) / price * 100,
+    }
+
+
 def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier,
              enabled: dict, combo_name: str, sent_alerts: dict):
-    """Run one scan cycle across all timeframes."""
+    """Run one scan cycle: 5m/15m signal → 1m entry."""
     print(f"\n[{vn_now().strftime('%H:%M:%S')}] Scanning {SYMBOL}...")
-    results = []
 
-    for tf in TIMEFRAMES:
+    # Step 1: Scan 5m and 15m for signals
+    signals = []
+    for tf in SIGNAL_TIMEFRAMES:
         result = scan_timeframe(fetcher, SYMBOL, tf, enabled, combo_name)
         if result:
-            results.append(result)
+            signals.append(result)
             print(f"  [{tf}] {result['signal']} @ {result['price']:,.1f} "
                   f"(conf={result['confidence']}, conditions={len(result['conditions'])})")
         else:
             print(f"  [{tf}] No signal")
 
-    if not results:
+    if not signals:
+        print("  No signal on 5m/15m. Skipping entry scan.")
         return
 
-    # Send alerts for new signals (avoid duplicates)
-    for r in results:
-        # Unique key: symbol + timeframe + signal direction + bar time
-        alert_key = f"{SYMBOL}_{r['interval']}_{r['signal']}_{r['time']}"
-        if alert_key in sent_alerts:
-            continue
+    # Determine direction: prefer 15m, or 5m if aligned
+    # If both agree → strong; if only one → use it
+    directions = set(s["signal"] for s in signals)
+    if len(directions) > 1:
+        print("  5m and 15m disagree. Skipping.")
+        return
 
-        # Build multi-TF context
-        other_tfs = [x for x in results if x["interval"] != r["interval"]]
-        mtf_note = ""
-        if other_tfs:
-            aligned = [x["interval"] for x in other_tfs if x["signal"] == r["signal"]]
-            if aligned:
-                mtf_note = f"MTF Aligned: {', '.join(aligned)}"
+    direction = signals[0]["signal"]
+    best_signal = max(signals, key=lambda x: x["confidence"])
+    tfs_with_signal = ", ".join(s["interval"] for s in signals)
 
-        extra = {
-            "Timeframe": r["interval"],
-            "RSI": f"{r['rsi']:.1f}",
-            "EMA Slope": f"{r['ema_slope']:.3f}",
-            "ADX": f"{r['adx']:.1f}",
-            "ATR": f"{r['atr']:.2f}",
-            "Bar Time": r["time"],
-        }
-        if mtf_note:
-            extra["MTF"] = mtf_note
+    # Step 2: Use 1m to find optimal Limit entry
+    print(f"  -> {direction} confirmed on [{tfs_with_signal}]. Finding 1m entry...")
+    entry = get_1m_entry(fetcher, SYMBOL, direction)
 
-        notifier.send_signal_alert(
-            symbol=SYMBOL,
-            signal=r["signal"],
-            price=r["price"],
-            conditions_fired=r["conditions"],
-            confidence=r["confidence"],
-            combo_name=f"{combo_name} [{r['interval']}]",
-            sl=r["sl"],
-            tp=r["tp"],
-            extra=extra,
-        )
-        sent_alerts[alert_key] = time.time()
-        print(f"  -> Alert sent: {r['signal']} on {r['interval']}")
+    if not entry:
+        print("  [1m] Could not calculate entry.")
+        return
 
-    # Bonus: if ALL timeframes agree, send a strong confluence alert
-    if len(results) >= 2:
-        directions = set(r["signal"] for r in results)
-        if len(directions) == 1:
-            direction = directions.pop()
-            tfs = ", ".join(r["interval"] for r in results)
-            confluence_key = f"{SYMBOL}_MTF_{direction}_{results[0]['time']}"
-            if confluence_key not in sent_alerts:
-                best = max(results, key=lambda x: x["confidence"])
-                msg = (
-                    f"{'=' * 20}\n"
-                    f"<b>MULTI-TF CONFLUENCE</b>\n"
-                    f"{'=' * 20}\n"
-                    f"<b>{direction}</b> on <b>{tfs}</b>\n"
-                    f"Symbol: <code>{SYMBOL}</code>\n"
-                    f"Price: <code>{best['price']:,.1f}</code>\n"
-                    f"Best confidence: {best['confidence']}/3\n"
-                    f"SL: <code>{best['sl']:,.1f}</code> | TP: <code>{best['tp']:,.1f}</code>\n"
-                )
-                notifier.send(msg)
-                sent_alerts[confluence_key] = time.time()
-                print(f"  -> MTF CONFLUENCE ALERT: {direction} on {tfs}")
+    print(f"  [1m] Limit {direction}: {entry['limit_price']:,.1f} "
+          f"(current={entry['current_price']:,.1f}, pullback={entry['distance_pct']:.2f}%)")
+    print(f"       SL={entry['sl']:,.1f} | TP={entry['tp']:,.1f} | R:R={entry['rr_ratio']:.1f}")
+
+    # Dedup: unique key based on signal TF + direction + signal bar time
+    alert_key = f"{SYMBOL}_{direction}_{best_signal['time']}"
+    if alert_key in sent_alerts:
+        print("  (Already alerted for this signal)")
+        return
+
+    # Step 3: Send Telegram alert
+    msg = (
+        f"{'━' * 25}\n"
+        f"<b>{'🟢 BUY' if direction == 'BUY' else '🔴 SELL'} SIGNAL</b>\n"
+        f"{'━' * 25}\n"
+        f"Symbol: <code>{SYMBOL}</code>\n"
+        f"Signal from: <b>{tfs_with_signal}</b>\n"
+        f"Confidence: {'⭐' * best_signal['confidence']} ({best_signal['confidence']}/3)\n"
+        f"Conditions: {', '.join(best_signal['conditions']) or 'Score-based'}\n"
+        f"\n"
+        f"<b>📋 LIMIT ORDER:</b>\n"
+        f"  Entry: <code>{entry['limit_price']:,.1f}</code>\n"
+        f"  Current: <code>{entry['current_price']:,.1f}</code>\n"
+        f"  Distance: {entry['distance_pct']:.2f}%\n"
+        f"\n"
+        f"  SL: <code>{entry['sl']:,.1f}</code>\n"
+        f"  TP: <code>{entry['tp']:,.1f}</code>\n"
+        f"  R:R = <b>{entry['rr_ratio']:.1f}</b>\n"
+        f"\n"
+        f"<i>ATR(1m)={entry['atr_1m']:.1f} | "
+        f"RSI={best_signal['rsi']:.0f} | "
+        f"ADX={best_signal['adx']:.0f}</i>\n"
+        f"<i>Range: {entry['recent_low']:,.1f} - {entry['recent_high']:,.1f}</i>"
+    )
+    notifier.send(msg)
+    sent_alerts[alert_key] = time.time()
+    print(f"  -> ALERT SENT!")
 
     # Cleanup old alerts (older than 1 hour)
     cutoff = time.time() - 3600
@@ -252,7 +296,6 @@ def main():
 
     combo_name = args.combo
     if combo_name not in COMBO_PRESETS:
-        # Try partial match
         matches = [k for k in COMBO_PRESETS if combo_name.lower() in k.lower()]
         if matches:
             combo_name = matches[0]
@@ -275,10 +318,12 @@ def main():
         print(f"Telegram configured. Chat ID: {notifier.chat_id}")
 
     print(f"Scanner started: {SYMBOL}")
-    print(f"Timeframes: {', '.join(TIMEFRAMES)}")
+    print(f"Signal TFs: {', '.join(SIGNAL_TIMEFRAMES)}")
+    print(f"Entry TF: {ENTRY_TIMEFRAME}")
     print(f"Combo: {combo_name}")
     print(f"Conditions: {[COND_LABELS.get(k, k) for k in enabled]}")
     print(f"Interval: {args.interval}s")
+    print(f"Entry: Limit @ {ENTRY_ATR_PULLBACK}*ATR pullback | SL {SL_ATR_MULT}*ATR | TP {TP_ATR_MULT}*ATR")
     print("=" * 40)
 
     sent_alerts = {}
@@ -291,9 +336,10 @@ def main():
     notifier.send(
         f"<b>Scanner Started</b>\n"
         f"Symbol: <code>{SYMBOL}</code>\n"
-        f"TFs: {', '.join(TIMEFRAMES)}\n"
+        f"Signal: {', '.join(SIGNAL_TIMEFRAMES)} → Entry: {ENTRY_TIMEFRAME}\n"
         f"Strategy: {combo_name}\n"
-        f"Interval: {args.interval}s"
+        f"Interval: {args.interval}s\n"
+        f"Limit: {ENTRY_ATR_PULLBACK}×ATR pullback | R:R {TP_ATR_MULT/SL_ATR_MULT:.0f}:1"
     )
 
     while True:
@@ -301,7 +347,7 @@ def main():
             if not is_trading_hours():
                 now = vn_now()
                 print(f"\r[{now.strftime('%H:%M:%S')}] Outside trading hours (9:00-14:30 Mon-Fri). Waiting...", end="")
-                time.sleep(60)  # check every minute outside hours
+                time.sleep(60)
                 continue
 
             run_scan(fetcher, notifier, enabled, combo_name, sent_alerts)
@@ -311,7 +357,6 @@ def main():
         except Exception as e:
             print(f"[ERROR] {e}")
             traceback.print_exc()
-            # Don't spam on repeated errors
             time.sleep(args.interval)
             continue
 
