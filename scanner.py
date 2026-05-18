@@ -16,8 +16,10 @@ import sys
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
+import yaml
 
 from config import Config
 from src.data_fetcher import DataFetcher
@@ -27,37 +29,92 @@ from src.signals import (
 )
 from src.notifier import TelegramNotifier
 
-# ─── CONFIG ───────────────────────────────────────────────
+# ─── LOAD CONFIG FROM YAML ────────────────────────────────────────
+CONFIG_PATH = Path(__file__).parent / "strategy_config.yaml"
+
+
+def load_strategy_config() -> dict:
+    """Load strategy configuration from YAML file."""
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def apply_config(cfg: dict):
+    """Apply YAML config to module-level variables."""
+    global SYMBOL, SIGNAL_TIMEFRAMES, ENTRY_TIMEFRAME, COMBO, SCAN_INTERVAL
+    global MARKET_OPEN, MARKET_CLOSE
+    global ENTRY_ATR_PULLBACK, SL_ATR_MULT, TP_ATR_MULT, PARAMS
+
+    SYMBOL = cfg.get("symbol", "VN30F1M")
+    SIGNAL_TIMEFRAMES = cfg.get("signal_timeframes", ["5m", "15m"])
+    ENTRY_TIMEFRAME = cfg.get("entry_timeframe", "1m")
+    COMBO = cfg.get("active_combo", "D: Trend Confirmation (safest)")
+    SCAN_INTERVAL = cfg.get("scan_interval", 60)
+
+    # Trading hours
+    open_str = cfg.get("market_open", "09:00")
+    close_str = cfg.get("market_close", "14:30")
+    MARKET_OPEN = tuple(int(x) for x in open_str.split(":"))
+    MARKET_CLOSE = tuple(int(x) for x in close_str.split(":"))
+
+    # Entry parameters
+    entry = cfg.get("entry", {})
+    ENTRY_ATR_PULLBACK = entry.get("atr_pullback", 0.5)
+    SL_ATR_MULT = entry.get("sl_atr_mult", 1.5)
+    TP_ATR_MULT = entry.get("tp_atr_mult", 3.0)
+
+    # Indicator parameters
+    ind = cfg.get("indicators", {})
+    PARAMS = {
+        "fast_ma": ind.get("fast_ma", 10),
+        "slow_ma": ind.get("slow_ma", 20),
+        "rsi_period": ind.get("rsi_period", 7),
+        "oversold": ind.get("oversold", 35),
+        "overbought": ind.get("overbought", 70),
+        "macd_fast": ind.get("macd_fast", 12),
+        "macd_slow": ind.get("macd_slow", 26),
+        "macd_signal": ind.get("macd_signal", 9),
+        "vol_mult": ind.get("vol_mult", 1.5),
+    }
+
+    # Sync combo presets from YAML back to signals module
+    combos = cfg.get("combos", {})
+    if combos:
+        for key, combo_cfg in combos.items():
+            name = combo_cfg.get("name", key)
+            COMBO_PRESETS[name] = {
+                "desc": combo_cfg.get("desc", ""),
+                "primary": combo_cfg.get("primary", []),
+                "confirm": combo_cfg.get("confirm", []),
+                "gate": combo_cfg.get("gate", []),
+            }
+
+
+# Initialize with defaults, then override from YAML
 SYMBOL = "VN30F1M"
-SIGNAL_TIMEFRAMES = ["5m", "15m"]  # Signal detection
-ENTRY_TIMEFRAME = "1m"             # Entry timing
+SIGNAL_TIMEFRAMES = ["5m", "15m"]
+ENTRY_TIMEFRAME = "1m"
 COMBO = "D: Trend Confirmation (safest)"
-SCAN_INTERVAL = 60  # seconds (= 1 candle on 1m)
+SCAN_INTERVAL = 60
+MARKET_OPEN = (9, 0)
+MARKET_CLOSE = (14, 30)
+ENTRY_ATR_PULLBACK = 0.5
+SL_ATR_MULT = 1.5
+TP_ATR_MULT = 3.0
+PARAMS = {
+    "fast_ma": 10, "slow_ma": 20, "rsi_period": 7,
+    "oversold": 35, "overbought": 70,
+    "macd_fast": 12, "macd_slow": 26, "macd_signal": 9,
+    "vol_mult": 1.5,
+}
+
+# Load from YAML if exists
+if CONFIG_PATH.exists():
+    _cfg = load_strategy_config()
+    apply_config(_cfg)
 
 # Vietnam timezone (UTC+7)
 VN_TZ = timezone(timedelta(hours=7))
-
-# Trading hours (Vietnam market: Mon-Fri 9:00-14:30)
-MARKET_OPEN = (9, 0)
-MARKET_CLOSE = (14, 30)
-
-# ATR-based Limit Order parameters
-ENTRY_ATR_PULLBACK = 0.5   # Entry = price ± 0.5*ATR (pullback from current)
-SL_ATR_MULT = 1.5          # Stop Loss = entry ± 1.5*ATR
-TP_ATR_MULT = 3.0          # Take Profit = entry ± 3.0*ATR
-
-# Signal parameters
-PARAMS = {
-    "fast_ma": 10,
-    "slow_ma": 20,
-    "rsi_period": 7,
-    "oversold": 35,
-    "overbought": 70,
-    "macd_fast": 12,
-    "macd_slow": 26,
-    "macd_signal": 9,
-    "vol_mult": 1.5,
-}
 
 
 def vn_now() -> datetime:

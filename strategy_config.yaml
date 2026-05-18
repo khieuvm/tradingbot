@@ -1,0 +1,133 @@
+# ═══════════════════════════════════════════════════════════════════
+# STRATEGY CONFIGURATION - VN30F1M Scanner
+# ═══════════════════════════════════════════════════════════════════
+# Edit this file to change scanner behavior.
+# After editing, run: py scanner.py --once (to test)
+# ═══════════════════════════════════════════════════════════════════
+
+# ─── GENERAL ──────────────────────────────────────────────────────
+symbol: VN30F1M
+scan_interval: 60           # seconds (= 1 candle on 1m)
+
+# ─── TIMEFRAMES ──────────────────────────────────────────────────
+# Step 1: Scan these for signal direction
+signal_timeframes:
+  - 5m
+  - 15m
+
+# Step 2: Use this to find optimal entry
+entry_timeframe: 1m
+
+# ─── TRADING HOURS (Vietnam, Mon-Fri) ────────────────────────────
+market_open: "09:00"
+market_close: "14:30"
+
+# ─── ACTIVE COMBO PRESET ─────────────────────────────────────────
+# Choose one: A, B, C, D, K, or Custom
+active_combo: "D: Trend Confirmation (safest)"
+
+# ─── ENTRY / RISK MANAGEMENT ─────────────────────────────────────
+entry:
+  atr_pullback: 0.5         # Limit entry = price ± (this × ATR_1m)
+  sl_atr_mult: 1.5          # Stop Loss = entry ± (this × ATR_1m)
+  tp_atr_mult: 3.0          # Take Profit = entry ± (this × ATR_1m)
+  # => R:R = tp/sl = 3.0/1.5 = 2:1
+
+# ─── INDICATOR PARAMETERS ────────────────────────────────────────
+indicators:
+  fast_ma: 10               # Fast SMA period
+  slow_ma: 20               # Slow SMA period
+  rsi_period: 7             # RSI lookback
+  oversold: 35              # RSI oversold threshold
+  overbought: 70            # RSI overbought threshold
+  macd_fast: 12             # MACD fast EMA
+  macd_slow: 26             # MACD slow EMA
+  macd_signal: 9            # MACD signal line
+  vol_mult: 1.5             # Volume spike multiplier (vs 20-bar avg)
+
+# ═══════════════════════════════════════════════════════════════════
+# COMBO PRESETS - Signal generation logic
+# ═══════════════════════════════════════════════════════════════════
+# How it works:
+#   - "primary": At least 1 must fire to trigger a signal
+#   - "confirm": Each one that fires adds +1 confidence (max 3)
+#   - "gate": ALL must pass, or signal is blocked
+#
+# Available conditions:
+#   sma_cross      - SMA fast/slow crossover
+#   macd_cross     - MACD line crosses signal line
+#   ema_pullback   - Price pulls back to EMA21 in a trend
+#   bb_squeeze     - Bollinger Band squeeze breakout
+#   rsi_div        - RSI divergence (price vs RSI direction)
+#   macd_hist_rev  - MACD histogram reversal (momentum shift)
+#   stoch_cross    - Stochastic %K/%D crossover in extreme zone
+#   bb_bounce      - Price touches Bollinger Band + reversal
+#   engulfing      - Bullish/Bearish engulfing candle pattern
+#   ema_ribbon     - EMA 8/13/21 ribbon aligned (trend direction)
+#   inside_bar     - Inside bar breakout pattern
+#   hammer_star    - Hammer (bullish) / Shooting Star (bearish)
+#   adx_di         - ADX > 20 and DI+/DI- crossover
+#   sr_breakout    - Break above/below 20-bar high/low
+#   sr_atr         - Near support/resistance ± ATR zone
+#   macd_filter    - [GATE] Block BUY if MACD < signal, block SELL if MACD > signal
+#   vol_color_filter - [GATE] Block BUY on red volume, block SELL on green volume
+# ═══════════════════════════════════════════════════════════════════
+
+combos:
+  A_Trend_Pullback:
+    name: "A: Trend Pullback (~65% WR)"
+    desc: "EMA Ribbon aligned + pullback to EMA21. MACD + ADX confirm."
+    primary:
+      - ema_ribbon
+      - ema_pullback
+    confirm:
+      - adx_di
+      - macd_cross
+      - macd_hist_rev
+
+  B_Momentum_Breakout:
+    name: "B: Momentum Breakout (R:R 3:1)"
+    desc: "BB Squeeze breakout + high/low break. ADX + Volume confirm."
+    primary:
+      - bb_squeeze
+      - sr_breakout
+    confirm:
+      - adx_di
+      - macd_hist_rev
+      - inside_bar
+
+  C_Mean_Reversion:
+    name: "C: Mean Reversion (~60% WR)"
+    desc: "BB touch + Stochastic extreme. RSI Div + candle patterns confirm."
+    primary:
+      - bb_bounce
+      - stoch_cross
+    confirm:
+      - rsi_div
+      - hammer_star
+      - engulfing
+
+  D_Trend_Confirmation:
+    name: "D: Trend Confirmation (safest)"
+    desc: "SMA Cross + MACD Cross agree. EMA Ribbon + ADX confirm trend."
+    primary:
+      - sma_cross
+      - macd_cross
+    confirm:
+      - ema_ribbon
+      - adx_di
+      - macd_hist_rev
+
+  K_Smart_Mean_Reversion:
+    name: "K: Smart Mean Reversion"
+    desc: "Same as C but with 2 gates to filter bad signals."
+    primary:
+      - bb_bounce
+      - stoch_cross
+    confirm:
+      - rsi_div
+      - hammer_star
+      - engulfing
+    gate:
+      - macd_filter
+      - vol_color_filter
