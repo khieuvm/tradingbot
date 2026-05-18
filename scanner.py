@@ -13,7 +13,7 @@ Usage:
 import sys
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -31,19 +31,36 @@ TIMEFRAMES = ["1m", "5m", "15m"]
 COMBO = "D: Trend Confirmation (safest)"  # default combo preset
 SCAN_INTERVAL = 30  # seconds
 
-# Trading hours (Vietnam time, UTC+7)
-MARKET_OPEN = (9, 0)   # 09:00
-MARKET_CLOSE = (14, 30)  # 14:30
+# Vietnam timezone (UTC+7)
+VN_TZ = timezone(timedelta(hours=7))
+
+# Trading hours (Vietnam market: Mon-Fri 9:00-14:30, lunch break 11:30-13:00)
+MARKET_OPEN = (9, 0)      # 09:00
+LUNCH_START = (11, 30)    # 11:30
+LUNCH_END = (13, 0)       # 13:00
+MARKET_CLOSE = (14, 30)   # 14:30
+
+
+def vn_now() -> datetime:
+    """Get current time in Vietnam timezone."""
+    return datetime.now(VN_TZ)
 
 
 def is_trading_hours() -> bool:
-    """Check if current time is within VN30F trading hours (Mon-Fri 9:00-14:30)."""
-    now = datetime.now()
+    """Check if current time is within VN30F trading hours (Mon-Fri 9:00-14:30, skip lunch 11:30-13:00)."""
+    now = vn_now()
     # Weekend check (Saturday=5, Sunday=6)
     if now.weekday() >= 5:
         return False
     current = (now.hour, now.minute)
-    return MARKET_OPEN <= current <= MARKET_CLOSE
+    # Outside market hours
+    if current < MARKET_OPEN or current > MARKET_CLOSE:
+        return False
+    # Lunch break (futures still trades but less liquid — optional skip)
+    # Uncomment next line to skip lunch break:
+    # if LUNCH_START <= current < LUNCH_END:
+    #     return False
+    return True
 
 # Signal parameters (same as web.py defaults)
 PARAMS = {
@@ -72,7 +89,7 @@ def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
                    enabled: dict, combo_name: str) -> dict | None:
     """Scan a single timeframe. Returns signal info dict or None."""
     # Calculate date range based on interval
-    now = datetime.now()
+    now = vn_now()
     if interval in ("1m", "5m"):
         days_back = 5
     elif interval == "15m":
@@ -140,7 +157,7 @@ def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
 def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier,
              enabled: dict, combo_name: str, sent_alerts: dict):
     """Run one scan cycle across all timeframes."""
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {SYMBOL}...")
+    print(f"\n[{vn_now().strftime('%H:%M:%S')}] Scanning {SYMBOL}...")
     results = []
 
     for tf in TIMEFRAMES:
@@ -282,7 +299,7 @@ def main():
     while True:
         try:
             if not is_trading_hours():
-                now = datetime.now()
+                now = vn_now()
                 print(f"\r[{now.strftime('%H:%M:%S')}] Outside trading hours (9:00-14:30 Mon-Fri). Waiting...", end="")
                 time.sleep(60)  # check every minute outside hours
                 continue
