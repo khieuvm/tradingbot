@@ -123,12 +123,14 @@ def vn_now() -> datetime:
 
 
 def is_trading_hours() -> bool:
-    """Check if current time is within VN30F trading hours (Mon-Fri 9:00-14:30)."""
+    """Check if current time is within VN30F trading hours (Mon-Fri 9:00-11:30, 13:00-14:30)."""
     now = vn_now()
     if now.weekday() >= 5:
         return False
     current = (now.hour, now.minute)
-    return MARKET_OPEN <= current <= MARKET_CLOSE
+    session_1 = (9, 0) <= current <= (11, 30)
+    session_2 = (13, 0) <= current <= (14, 30)
+    return session_1 or session_2
 
 
 def get_enabled_from_combo(combo_name: str) -> dict:
@@ -469,7 +471,6 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="VN30F1M Multi-TF Signal Scanner")
     parser.add_argument("--once", action="store_true", help="Run once then exit")
-    parser.add_argument("--interval", type=int, default=SCAN_INTERVAL, help="Scan interval (seconds)")
     args = parser.parse_args()
 
     # All combos with primary conditions
@@ -488,7 +489,7 @@ def main():
     print(f"Entry TF: {ENTRY_TIMEFRAME}")
     print(f"Combos: {[n.split(':')[0].strip() for n in active_combos]}")
     print(f"Patterns: Independent (all TFs)")
-    print(f"Interval: {args.interval}s")
+    print(f"Interval: {SCAN_INTERVAL}s")
     print(f"Entry: Limit @ {ENTRY_ATR_PULLBACK}*ATR pullback | SL {SL_ATR_MULT}*ATR | TP {TP_ATR_MULT}*ATR")
     print("=" * 40)
 
@@ -505,7 +506,7 @@ def main():
         f"Symbol: <code>{SYMBOL}</code>\n"
         f"Signal: {', '.join(SIGNAL_TIMEFRAMES)} → Entry: {ENTRY_TIMEFRAME}\n"
         f"Combos: {combo_labels} + Patterns\n"
-        f"Interval: {args.interval}s\n"
+        f"Interval: {SCAN_INTERVAL}s\n"
         f"Limit: {ENTRY_ATR_PULLBACK}×ATR pullback | R:R {TP_ATR_MULT/SL_ATR_MULT:.0f}:1"
     )
 
@@ -513,7 +514,7 @@ def main():
         try:
             if not is_trading_hours():
                 now = vn_now()
-                print(f"\r[{now.strftime('%H:%M:%S')}] Outside trading hours (9:00-14:30 Mon-Fri). Waiting...", end="")
+                print(f"\r[{now.strftime('%H:%M:%S')}] Outside trading hours (9:00-11:30 / 13:00-14:30). Waiting...", end="")
                 time.sleep(60)
                 continue
 
@@ -524,10 +525,10 @@ def main():
         except Exception as e:
             print(f"[ERROR] {e}")
             traceback.print_exc()
-            time.sleep(args.interval)
+            time.sleep(SCAN_INTERVAL)
             continue
 
-        time.sleep(args.interval)
+        time.sleep(SCAN_INTERVAL)
 
 
 if __name__ == "__main__":
