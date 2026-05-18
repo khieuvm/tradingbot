@@ -6,6 +6,15 @@ on:
     - cron: '0 2 * * 1-5'
   # Allow manual trigger
   workflow_dispatch:
+    inputs:
+      duration:
+        description: 'How long to run (seconds). Default=20000 (~5.5h for full session)'
+        required: false
+        default: '20000'
+      combo:
+        description: 'Combo preset name'
+        required: false
+        default: 'D: Trend Confirmation (safest)'
 
 jobs:
   scan:
@@ -31,5 +40,6 @@ jobs:
           DNSE_API_KEY: ${{ secrets.DNSE_API_KEY }}
           DNSE_API_SECRET: ${{ secrets.DNSE_API_SECRET }}
         run: |
-          # Run until market close (5.5 hours = 19800 seconds + buffer)
-          timeout 20000 python scanner.py --interval 30 || true
+          DURATION=${{ github.event.inputs.duration || '20000' }}
+          COMBO="${{ github.event.inputs.combo || 'D: Trend Confirmation (safest)' }}"
+          timeout $DURATION python scanner.py --interval 30 --combo "$COMBO" || true
