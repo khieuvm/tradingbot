@@ -33,6 +33,16 @@ entry:
   tp_atr_mult: 3.0          # Take Profit = entry ± (this × ATR_1m)
   # => R:R = tp/sl = 3.0/1.5 = 2:1
 
+# ─── PATTERN DETECTION (reported in alerts) ───────────────────────
+# These patterns are detected and reported but don't trigger signals.
+# They add context to help you decide whether to take the trade.
+patterns:
+  morning_star: true        # 3-candle bullish reversal
+  evening_star: true        # 3-candle bearish reversal
+  engulfing: true           # Bullish/Bearish engulfing
+  head_and_shoulders: true  # H&S top / Inverse H&S bottom
+  volume_confirm: true      # Volume > 1.5x avg on signal bar
+
 # ─── INDICATOR PARAMETERS ────────────────────────────────────────
 indicators:
   fast_ma: 10               # Fast SMA period

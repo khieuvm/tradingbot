@@ -178,6 +178,25 @@ def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
     fired = [COND_LABELS.get(k, k) for k in ALL_COND_KEYS
              if last.get(f"{prefix}{k}", 0) == 1]
 
+    # Detect patterns on last bar
+    patterns = []
+    if signal == 1:  # BUY
+        if last.get("pat_morning_star", 0) == 1:
+            patterns.append("Morning Star")
+        if last.get("pat_bull_engulfing", 0) == 1:
+            patterns.append("Bullish Engulfing")
+        if last.get("pat_head_shoulders_bottom", 0) == 1:
+            patterns.append("Inv. Head & Shoulders")
+    else:  # SELL
+        if last.get("pat_evening_star", 0) == 1:
+            patterns.append("Evening Star")
+        if last.get("pat_bear_engulfing", 0) == 1:
+            patterns.append("Bearish Engulfing")
+        if last.get("pat_head_shoulders_top", 0) == 1:
+            patterns.append("Head & Shoulders")
+
+    vol_confirm = bool(last.get("pat_volume_confirm", 0))
+
     return {
         "interval": interval,
         "signal": "BUY" if signal == 1 else "SELL",
@@ -185,6 +204,8 @@ def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
         "atr": float(last.get("atr", 0)),
         "confidence": int(last.get("signal_confidence", 0)),
         "conditions": fired,
+        "patterns": patterns,
+        "volume_confirm": vol_confirm,
         "rsi": float(last.get("rsi", 0)),
         "ema_slope": float(last.get("ema_slope", 0)),
         "adx": float(last.get("adx", 0)),
@@ -308,7 +329,20 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier,
         print("  (Already alerted for this signal)")
         return
 
-    # Step 3: Send Telegram alert
+    # Step 3: Build pattern and volume info
+    all_patterns = []
+    has_vol_confirm = False
+    for s in signals:
+        all_patterns.extend(s.get("patterns", []))
+        if s.get("volume_confirm"):
+            has_vol_confirm = True
+    # Deduplicate patterns
+    all_patterns = list(dict.fromkeys(all_patterns))
+
+    pattern_str = ", ".join(all_patterns) if all_patterns else "None"
+    vol_str = "Yes ✓" if has_vol_confirm else "No"
+
+    # Step 4: Send Telegram alert
     msg = (
         f"{'━' * 25}\n"
         f"<b>{'🟢 BUY' if direction == 'BUY' else '🔴 SELL'} SIGNAL</b>\n"
@@ -317,6 +351,10 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier,
         f"Signal from: <b>{tfs_with_signal}</b>\n"
         f"Confidence: {'⭐' * best_signal['confidence']} ({best_signal['confidence']}/3)\n"
         f"Conditions: {', '.join(best_signal['conditions']) or 'Score-based'}\n"
+        f"\n"
+        f"<b>🕯 PATTERNS:</b>\n"
+        f"  {pattern_str}\n"
+        f"  Volume Confirm: <b>{vol_str}</b>\n"
         f"\n"
         f"<b>📋 LIMIT ORDER:</b>\n"
         f"  Entry: <code>{entry['limit_price']:,.1f}</code>\n"

@@ -783,6 +783,66 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[green_candle, "_b_vol_color_filter"] = 1
         df.loc[red_candle, "_s_vol_color_filter"] = 1
 
+    # ==================== PATTERN DETECTION (informational) ====================
+    # These are reported in alerts for context, not used for signal scoring.
+
+    body = df["close"] - df["open"]
+    body_abs = body.abs()
+    prev_body = body.shift(1)
+    prev2_body = body.shift(2)
+
+    # --- Morning Star (bullish reversal) ---
+    # 3-candle pattern: big red → small body (indecision) → big green
+    big_red_2 = (prev2_body < 0) & (prev2_body.abs() > body_abs.rolling(20).mean())
+    small_body_1 = body_abs.shift(1) < body_abs.rolling(20).mean() * 0.5
+    big_green_0 = (body > 0) & (body_abs > body_abs.rolling(20).mean())
+    # Close of 3rd candle must recover > 50% of 1st candle body
+    recover = df["close"] > (df["open"].shift(2) + df["close"].shift(2)) / 2
+    df["pat_morning_star"] = (big_red_2 & small_body_1 & big_green_0 & recover).astype(int)
+
+    # --- Evening Star (bearish reversal) ---
+    # 3-candle pattern: big green → small body → big red
+    big_green_2 = (prev2_body > 0) & (prev2_body.abs() > body_abs.rolling(20).mean())
+    small_body_1_ev = body_abs.shift(1) < body_abs.rolling(20).mean() * 0.5
+    big_red_0 = (body < 0) & (body_abs > body_abs.rolling(20).mean())
+    drop = df["close"] < (df["open"].shift(2) + df["close"].shift(2)) / 2
+    df["pat_evening_star"] = (big_green_2 & small_body_1_ev & big_red_0 & drop).astype(int)
+
+    # --- Engulfing (already a condition, but track separately for pattern alert) ---
+    bull_engulf = (body > 0) & (prev_body < 0) & (df["open"] <= df["close"].shift(1)) & (df["close"] >= df["open"].shift(1))
+    bear_engulf = (body < 0) & (prev_body > 0) & (df["open"] >= df["close"].shift(1)) & (df["close"] <= df["open"].shift(1))
+    df["pat_bull_engulfing"] = bull_engulf.astype(int)
+    df["pat_bear_engulfing"] = bear_engulf.astype(int)
+
+    # --- Head and Shoulders (simplified: 5-bar swing detection) ---
+    # Detect: left shoulder (high) < head (higher high) > right shoulder (high ≈ left)
+    h = df["high"]
+    l = df["low"]
+    # Bearish H&S (top reversal)
+    left_sh = h.shift(4)
+    head = h.shift(2)
+    right_sh = h.shift(0)
+    neckline = df[["low"]].shift(1).rolling(3).min().shift(0)
+    head_higher = (head > left_sh) & (head > right_sh)
+    shoulders_similar = (right_sh >= left_sh * 0.97) & (right_sh <= left_sh * 1.03)
+    break_neck_bear = df["close"] < neckline["low"]
+    df["pat_head_shoulders_top"] = (head_higher & shoulders_similar & break_neck_bear).astype(int)
+
+    # Bullish inverse H&S (bottom reversal)
+    left_sh_inv = l.shift(4)
+    head_inv = l.shift(2)
+    right_sh_inv = l.shift(0)
+    neckline_inv = df[["high"]].shift(1).rolling(3).max().shift(0)
+    head_lower = (head_inv < left_sh_inv) & (head_inv < right_sh_inv)
+    shoulders_similar_inv = (right_sh_inv >= left_sh_inv * 0.97) & (right_sh_inv <= left_sh_inv * 1.03)
+    break_neck_bull = df["close"] > neckline_inv["high"]
+    df["pat_head_shoulders_bottom"] = (head_lower & shoulders_similar_inv & break_neck_bull).astype(int)
+
+    # --- Volume Confirmation ---
+    # Volume > 1.5x 20-bar average on the signal bar
+    vol_avg = df["volume"].rolling(20).mean()
+    df["pat_volume_confirm"] = (df["volume"] > vol_avg * 1.5).astype(int)
+
     # ==================== VOLUME GATE ====================
     use_vol = enabled.get("vol_filter", True)
 
