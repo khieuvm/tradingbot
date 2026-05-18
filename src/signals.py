@@ -784,59 +784,168 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[red_candle, "_s_vol_color_filter"] = 1
 
     # ==================== PATTERN DETECTION (informational) ====================
+    # Improved implementation based on TA-Lib logic and swing-point analysis.
     # These are reported in alerts for context, not used for signal scoring.
 
-    body = df["close"] - df["open"]
-    body_abs = body.abs()
-    prev_body = body.shift(1)
-    prev2_body = body.shift(2)
+    _open = df["open"]
+    _close = df["close"]
+    _high = df["high"]
+    _low = df["low"]
+    _body = _close - _open
+    _body_abs = _body.abs()
+    _candle_range = _high - _low
 
-    # --- Morning Star (bullish reversal) ---
-    # 3-candle pattern: big red → small body (indecision) → big green
-    big_red_2 = (prev2_body < 0) & (prev2_body.abs() > body_abs.rolling(20).mean())
-    small_body_1 = body_abs.shift(1) < body_abs.rolling(20).mean() * 0.5
-    big_green_0 = (body > 0) & (body_abs > body_abs.rolling(20).mean())
-    # Close of 3rd candle must recover > 50% of 1st candle body
-    recover = df["close"] > (df["open"].shift(2) + df["close"].shift(2)) / 2
-    df["pat_morning_star"] = (big_red_2 & small_body_1 & big_green_0 & recover).astype(int)
+    # Adaptive body size thresholds (TA-Lib approach: rolling averages)
+    _body_avg = _body_abs.rolling(10, min_periods=1).mean()
+    _body_long = _body_abs > _body_avg * 1.5     # "Long" body
+    _body_short = _body_abs < _body_avg * 0.5    # "Short" body (doji-like)
 
-    # --- Evening Star (bearish reversal) ---
-    # 3-candle pattern: big green → small body → big red
-    big_green_2 = (prev2_body > 0) & (prev2_body.abs() > body_abs.rolling(20).mean())
-    small_body_1_ev = body_abs.shift(1) < body_abs.rolling(20).mean() * 0.5
-    big_red_0 = (body < 0) & (body_abs > body_abs.rolling(20).mean())
-    drop = df["close"] < (df["open"].shift(2) + df["close"].shift(2)) / 2
-    df["pat_evening_star"] = (big_green_2 & small_body_1_ev & big_red_0 & drop).astype(int)
+    # --- Morning Star (TA-Lib logic, adapted for intraday) ---
+    # 3-candle bullish reversal at bottom
+    # 1st (i-2): Long bearish (red)
+    # 2nd (i-1): Short body + opens near/below 1st close (relaxed gap for intraday)
+    # 3rd (i):   Bullish, body > short, close penetrates ≥30% into 1st body
+    _c1_long_bear = _body_long.shift(2) & (_body.shift(2) < 0)
+    # Relaxed gap: 2nd candle opens at or below 1st candle's close (no strict gap needed intraday)
+    _c2_upper = pd.concat([_open.shift(1), _close.shift(1)], axis=1).max(axis=1)
+    _c1_lower = pd.concat([_open.shift(2), _close.shift(2)], axis=1).min(axis=1)
+    _c1_close = _close.shift(2)
+    _gap_down = _open.shift(1) <= _c1_close  # open of 2nd <= close of 1st (bearish continuation)
+    _c2_short = _body_short.shift(1)
+    # 3rd candle: bullish, not short, close penetrates 30% into 1st body
+    _c3_bull = (_body > 0) & (~_body_short)
+    _penetration = 0.3
+    _c1_body_top = pd.concat([_open.shift(2), _close.shift(2)], axis=1).max(axis=1)
+    _c1_body_size = _body_abs.shift(2)
+    _c3_penetrate = _close > (_c1_body_top - _c1_body_size * (1 - _penetration))
+    df["pat_morning_star"] = (_c1_long_bear & _c2_short & _gap_down & _c3_bull & _c3_penetrate).fillna(False).astype(int)
 
-    # --- Engulfing (already a condition, but track separately for pattern alert) ---
-    bull_engulf = (body > 0) & (prev_body < 0) & (df["open"] <= df["close"].shift(1)) & (df["close"] >= df["open"].shift(1))
-    bear_engulf = (body < 0) & (prev_body > 0) & (df["open"] >= df["close"].shift(1)) & (df["close"] <= df["open"].shift(1))
-    df["pat_bull_engulfing"] = bull_engulf.astype(int)
-    df["pat_bear_engulfing"] = bear_engulf.astype(int)
+    # --- Evening Star (TA-Lib logic, adapted for intraday) ---
+    # 3-candle bearish reversal at top
+    # 1st (i-2): Long bullish (green)
+    # 2nd (i-1): Short body + opens near/above 1st close
+    # 3rd (i):   Bearish, body > short, close penetrates ≥30% into 1st body
+    _c1_long_bull = _body_long.shift(2) & (_body.shift(2) > 0)
+    _c1_close_bull = _close.shift(2)
+    _gap_up = _open.shift(1) >= _c1_close_bull  # open of 2nd >= close of 1st (bullish continuation)
+    _c3_bear = (_body < 0) & (~_body_short)
+    _c1_body_bottom = pd.concat([_open.shift(2), _close.shift(2)], axis=1).min(axis=1)
+    _c3_penetrate_ev = _close < (_c1_body_bottom + _c1_body_size * (1 - _penetration))
+    df["pat_evening_star"] = (_c1_long_bull & _c2_short & _gap_up & _c3_bear & _c3_penetrate_ev).fillna(False).astype(int)
 
-    # --- Head and Shoulders (simplified: 5-bar swing detection) ---
-    # Detect: left shoulder (high) < head (higher high) > right shoulder (high ≈ left)
-    h = df["high"]
-    l = df["low"]
-    # Bearish H&S (top reversal)
-    left_sh = h.shift(4)
-    head = h.shift(2)
-    right_sh = h.shift(0)
-    neckline = df[["low"]].shift(1).rolling(3).min().shift(0)
-    head_higher = (head > left_sh) & (head > right_sh)
-    shoulders_similar = (right_sh >= left_sh * 0.97) & (right_sh <= left_sh * 1.03)
-    break_neck_bear = df["close"] < neckline["low"]
-    df["pat_head_shoulders_top"] = (head_higher & shoulders_similar & break_neck_bear).astype(int)
+    # --- Engulfing (TA-Lib logic) ---
+    # Bullish: prev bearish + current bullish engulfs prev body entirely
+    # Additional: current body is "long" (meaningful size)
+    _prev_bear = _body.shift(1) < 0
+    _prev_bull = _body.shift(1) > 0
+    _engulf_buy = (
+        (_body > 0) & _prev_bear &
+        (_open <= _close.shift(1)) &  # open at or below prev close
+        (_close >= _open.shift(1)) &   # close at or above prev open
+        (_body_abs > _body_abs.shift(1))  # current body > prev body
+    )
+    _engulf_sell = (
+        (_body < 0) & _prev_bull &
+        (_open >= _close.shift(1)) &
+        (_close <= _open.shift(1)) &
+        (_body_abs > _body_abs.shift(1))
+    )
+    df["pat_bull_engulfing"] = _engulf_buy.fillna(False).astype(int)
+    df["pat_bear_engulfing"] = _engulf_sell.fillna(False).astype(int)
 
-    # Bullish inverse H&S (bottom reversal)
-    left_sh_inv = l.shift(4)
-    head_inv = l.shift(2)
-    right_sh_inv = l.shift(0)
-    neckline_inv = df[["high"]].shift(1).rolling(3).max().shift(0)
-    head_lower = (head_inv < left_sh_inv) & (head_inv < right_sh_inv)
-    shoulders_similar_inv = (right_sh_inv >= left_sh_inv * 0.97) & (right_sh_inv <= left_sh_inv * 1.03)
-    break_neck_bull = df["close"] > neckline_inv["high"]
-    df["pat_head_shoulders_bottom"] = (head_lower & shoulders_similar_inv & break_neck_bull).astype(int)
+    # --- Head and Shoulders (swing-point based, optimized) ---
+    # Step 1: Find swing highs/lows using rolling window (order=3)
+    _swing_order = 3  # bars on each side to confirm a swing (relaxed for intraday)
+    _lookback = 50    # bars to search for the pattern
+
+    # Vectorized swing detection: high == rolling max of 2*order+1 window centered on bar
+    _win = 2 * _swing_order + 1
+    _roll_max = _high.rolling(_win, center=True).max()
+    _roll_min = _low.rolling(_win, center=True).min()
+    _swing_high = (_high == _roll_max) & _roll_max.notna()
+    _swing_low = (_low == _roll_min) & _roll_min.notna()
+
+    df["pat_head_shoulders_top"] = 0
+    df["pat_head_shoulders_bottom"] = 0
+
+    # Step 2: Scan for H&S pattern in swing points
+    _sh_indices = _swing_high[_swing_high].index.tolist()
+    _sl_indices = _swing_low[_swing_low].index.tolist()
+
+    # Bearish H&S (top): find 3 consecutive swing highs where middle is highest
+    for i in range(2, len(_sh_indices)):
+        ls_idx = _sh_indices[i - 2]  # left shoulder
+        hd_idx = _sh_indices[i - 1]  # head
+        rs_idx = _sh_indices[i]      # right shoulder
+
+        ls_pos = df.index.get_loc(ls_idx)
+        hd_pos = df.index.get_loc(hd_idx)
+        rs_pos = df.index.get_loc(rs_idx)
+
+        # Must be within lookback window and reasonably spaced
+        if rs_pos - ls_pos > _lookback or rs_pos - ls_pos < 6:
+            continue
+
+        ls_val = _high.loc[ls_idx]
+        hd_val = _high.loc[hd_idx]
+        rs_val = _high.loc[rs_idx]
+
+        # Head must be highest
+        if hd_val <= ls_val or hd_val <= rs_val:
+            continue
+
+        # Shoulders roughly equal (within 3% of head height)
+        shoulder_diff = abs(ls_val - rs_val)
+        head_range = hd_val - min(ls_val, rs_val)
+        if head_range == 0 or shoulder_diff / head_range > 0.3:
+            continue
+
+        # Neckline: lowest low between shoulders
+        neck_slice = _low.iloc[ls_pos:rs_pos + 1]
+        neckline = neck_slice.min()
+
+        # Confirm: price breaks below neckline after right shoulder
+        if rs_pos < len(df) - 1:
+            post_close = _close.iloc[rs_pos:min(rs_pos + 5, len(df))]
+            if (post_close < neckline).any():
+                df.iloc[rs_pos, df.columns.get_loc("pat_head_shoulders_top")] = 1
+
+    # Bullish inverse H&S (bottom): 3 consecutive swing lows where middle is lowest
+    for i in range(2, len(_sl_indices)):
+        ls_idx = _sl_indices[i - 2]
+        hd_idx = _sl_indices[i - 1]
+        rs_idx = _sl_indices[i]
+
+        ls_pos = df.index.get_loc(ls_idx)
+        hd_pos = df.index.get_loc(hd_idx)
+        rs_pos = df.index.get_loc(rs_idx)
+
+        if rs_pos - ls_pos > _lookback or rs_pos - ls_pos < 6:
+            continue
+
+        ls_val = _low.loc[ls_idx]
+        hd_val = _low.loc[hd_idx]
+        rs_val = _low.loc[rs_idx]
+
+        # Head must be lowest
+        if hd_val >= ls_val or hd_val >= rs_val:
+            continue
+
+        # Shoulders roughly equal
+        shoulder_diff = abs(ls_val - rs_val)
+        head_range = max(ls_val, rs_val) - hd_val
+        if head_range == 0 or shoulder_diff / head_range > 0.3:
+            continue
+
+        # Neckline: highest high between shoulders
+        neck_slice = _high.iloc[ls_pos:rs_pos + 1]
+        neckline = neck_slice.max()
+
+        # Confirm: price breaks above neckline after right shoulder
+        if rs_pos < len(df) - 1:
+            post_close = _close.iloc[rs_pos:min(rs_pos + 5, len(df))]
+            if (post_close > neckline).any():
+                df.iloc[rs_pos, df.columns.get_loc("pat_head_shoulders_bottom")] = 1
 
     # --- Volume Confirmation ---
     # Volume > 1.5x 20-bar average on the signal bar

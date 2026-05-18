@@ -141,8 +141,8 @@ def get_enabled_from_combo(combo_name: str) -> dict:
 
 
 def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
-                   enabled: dict, combo_name: str) -> dict | None:
-    """Scan a single timeframe for signal. Returns signal info or None."""
+                   enabled: dict, combo_name: str) -> tuple[dict | None, pd.DataFrame | None]:
+    """Scan a single timeframe for signal. Returns (signal_info, sig_df) or (None, sig_df)."""
     now = vn_now()
     if interval in ("1m", "5m"):
         days_back = 5
@@ -158,11 +158,11 @@ def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
         df = fetcher.get_futures_ohlcv(symbol, start, end, interval=interval)
     except Exception as e:
         print(f"  [{interval}] Error: {e}")
-        return None
+        return None, None
 
     if df is None or df.empty or len(df) < 30:
         print(f"  [{interval}] Insufficient data ({len(df) if df is not None else 0} bars)")
-        return None
+        return None, None
 
     sig_df = generate_combined_signals(
         df, **PARAMS, enabled=enabled, combo_mode=combo_name,
@@ -172,30 +172,11 @@ def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
     signal = int(last.get("signal", 0))
 
     if signal == 0:
-        return None
+        return None, sig_df
 
     prefix = "_b_" if signal == 1 else "_s_"
     fired = [COND_LABELS.get(k, k) for k in ALL_COND_KEYS
              if last.get(f"{prefix}{k}", 0) == 1]
-
-    # Detect patterns on last bar
-    patterns = []
-    if signal == 1:  # BUY
-        if last.get("pat_morning_star", 0) == 1:
-            patterns.append("Morning Star")
-        if last.get("pat_bull_engulfing", 0) == 1:
-            patterns.append("Bullish Engulfing")
-        if last.get("pat_head_shoulders_bottom", 0) == 1:
-            patterns.append("Inv. Head & Shoulders")
-    else:  # SELL
-        if last.get("pat_evening_star", 0) == 1:
-            patterns.append("Evening Star")
-        if last.get("pat_bear_engulfing", 0) == 1:
-            patterns.append("Bearish Engulfing")
-        if last.get("pat_head_shoulders_top", 0) == 1:
-            patterns.append("Head & Shoulders")
-
-    vol_confirm = bool(last.get("pat_volume_confirm", 0))
 
     return {
         "interval": interval,
@@ -204,13 +185,86 @@ def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
         "atr": float(last.get("atr", 0)),
         "confidence": int(last.get("signal_confidence", 0)),
         "conditions": fired,
-        "patterns": patterns,
-        "volume_confirm": vol_confirm,
         "rsi": float(last.get("rsi", 0)),
         "ema_slope": float(last.get("ema_slope", 0)),
         "adx": float(last.get("adx", 0)),
         "time": str(last.get("time", last.name)),
-    }
+    }, sig_df
+
+
+def scan_patterns(fetcher: DataFetcher, symbol: str, interval: str,
+                  enabled: dict, combo_name: str,
+                  sig_df: pd.DataFrame = None) -> list[dict]:
+    """Scan a timeframe for candlestick patterns (independent of combo signals).
+
+    Returns a list of detected patterns on the last bar, each with volume confirm status.
+    If sig_df is provided, reuse it instead of fetching/computing again.
+    """
+    if sig_df is None:
+        now = vn_now()
+        if interval in ("1m", "5m"):
+            days_back = 5
+        elif interval == "15m":
+            days_back = 10
+        else:
+            days_back = 30
+
+        start = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        end = now.strftime("%Y-%m-%d")
+
+        try:
+            df = fetcher.get_futures_ohlcv(symbol, start, end, interval=interval)
+        except Exception as e:
+            print(f"  [{interval}] Pattern scan error: {e}")
+            return []
+
+        if df is None or df.empty or len(df) < 30:
+            return []
+
+        sig_df = generate_combined_signals(
+            df, **PARAMS, enabled=enabled, combo_mode=combo_name,
+        )
+
+    last = sig_df.iloc[-1]
+    vol_confirm = bool(last.get("pat_volume_confirm", 0))
+    price = float(last["close"])
+    rsi = float(last.get("rsi", 0))
+    atr = float(last.get("atr", 0))
+    bar_time = str(last.get("time", last.name))
+
+    detected = []
+
+    # Bullish patterns
+    if last.get("pat_morning_star", 0) == 1:
+        detected.append({"name": "Morning Star", "direction": "BUY",
+                         "vol_confirm": vol_confirm})
+    if last.get("pat_bull_engulfing", 0) == 1:
+        detected.append({"name": "Bullish Engulfing", "direction": "BUY",
+                         "vol_confirm": vol_confirm})
+    if last.get("pat_head_shoulders_bottom", 0) == 1:
+        detected.append({"name": "Inv. Head & Shoulders", "direction": "BUY",
+                         "vol_confirm": vol_confirm})
+
+    # Bearish patterns
+    if last.get("pat_evening_star", 0) == 1:
+        detected.append({"name": "Evening Star", "direction": "SELL",
+                         "vol_confirm": vol_confirm})
+    if last.get("pat_bear_engulfing", 0) == 1:
+        detected.append({"name": "Bearish Engulfing", "direction": "SELL",
+                         "vol_confirm": vol_confirm})
+    if last.get("pat_head_shoulders_top", 0) == 1:
+        detected.append({"name": "Head & Shoulders", "direction": "SELL",
+                         "vol_confirm": vol_confirm})
+
+    # Attach common info
+    for p in detected:
+        p["interval"] = interval
+        p["price"] = price
+        p["rsi"] = rsi
+        p["atr"] = atr
+        p["time"] = bar_time
+
+    return detected
 
 
 def get_1m_entry(fetcher: DataFetcher, symbol: str, direction: str) -> dict | None:
@@ -280,99 +334,129 @@ def get_1m_entry(fetcher: DataFetcher, symbol: str, direction: str) -> dict | No
     }
 
 
-def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier,
-             enabled: dict, combo_name: str, sent_alerts: dict):
-    """Run one scan cycle: 5m/15m signal → 1m entry."""
+def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict):
+    """Run one scan cycle: ALL combos + independent pattern detection."""
     print(f"\n[{vn_now().strftime('%H:%M:%S')}] Scanning {SYMBOL}...")
 
-    # Step 1: Scan 5m and 15m for signals
-    signals = []
+    # All combos that have primary conditions defined
+    active_combos = [
+        name for name, preset in COMBO_PRESETS.items()
+        if preset.get("primary")
+    ]
+
+    # ── PART A: Independent Pattern Detection (once per TF) ──
+    # Use first combo's enabled just to compute indicators+patterns
+    pat_enabled = get_enabled_from_combo(active_combos[0])
     for tf in SIGNAL_TIMEFRAMES:
-        result = scan_timeframe(fetcher, SYMBOL, tf, enabled, combo_name)
-        if result:
-            signals.append(result)
-            print(f"  [{tf}] {result['signal']} @ {result['price']:,.1f} "
-                  f"(conf={result['confidence']}, conditions={len(result['conditions'])})")
+        _, sig_df = scan_timeframe(fetcher, SYMBOL, tf, pat_enabled, active_combos[0])
+        patterns = scan_patterns(fetcher, SYMBOL, tf, pat_enabled, active_combos[0], sig_df=sig_df)
+        if patterns:
+            for pat in patterns:
+                pat_key = f"PAT_{SYMBOL}_{pat['name']}_{pat['time']}"
+                if pat_key in sent_alerts:
+                    continue
+                vol_str = "✓ Volume Confirm" if pat['vol_confirm'] else "✗ No Vol Confirm"
+                direction_emoji = "🟢" if pat['direction'] == 'BUY' else "🔴"
+                msg = (
+                    f"{'━' * 25}\n"
+                    f"<b>{direction_emoji} PATTERN: {pat['name']}</b>\n"
+                    f"{'━' * 25}\n"
+                    f"Symbol: <code>{SYMBOL}</code>\n"
+                    f"Timeframe: <b>{pat['interval']}</b>\n"
+                    f"Direction: <b>{pat['direction']}</b>\n"
+                    f"Price: <code>{pat['price']:,.1f}</code>\n"
+                    f"Volume: <b>{vol_str}</b>\n"
+                    f"\n"
+                    f"<i>RSI={pat['rsi']:.0f} | ATR={pat['atr']:.1f}</i>"
+                )
+                notifier.send(msg)
+                sent_alerts[pat_key] = time.time()
+                print(f"  [{tf}] Pattern: {pat['name']} ({pat['direction']}) "
+                      f"vol={'✓' if pat['vol_confirm'] else '✗'}")
         else:
-            print(f"  [{tf}] No signal")
+            print(f"  [{tf}] No pattern")
 
-    if not signals:
-        print("  No signal on 5m/15m. Skipping entry scan.")
-        return
+    # ── PART B: ALL Combo Signals (each combo scanned independently) ──
+    any_signal = False
+    for combo_name in active_combos:
+        combo_enabled = get_enabled_from_combo(combo_name)
+        signals = []
+        for tf in SIGNAL_TIMEFRAMES:
+            result, _ = scan_timeframe(fetcher, SYMBOL, tf, combo_enabled, combo_name)
+            if result:
+                signals.append(result)
 
-    # Determine direction: prefer 15m, or 5m if aligned
-    # If both agree → strong; if only one → use it
-    directions = set(s["signal"] for s in signals)
-    if len(directions) > 1:
-        print("  5m and 15m disagree. Skipping.")
-        return
+        if not signals:
+            continue
 
-    direction = signals[0]["signal"]
-    best_signal = max(signals, key=lambda x: x["confidence"])
-    tfs_with_signal = ", ".join(s["interval"] for s in signals)
+        # Check direction agreement across TFs
+        directions = set(s["signal"] for s in signals)
+        if len(directions) > 1:
+            continue
 
-    # Step 2: Use 1m to find optimal Limit entry
-    print(f"  -> {direction} confirmed on [{tfs_with_signal}]. Finding 1m entry...")
-    entry = get_1m_entry(fetcher, SYMBOL, direction)
+        direction = signals[0]["signal"]
+        best_signal = max(signals, key=lambda x: x["confidence"])
+        tfs_with_signal = ", ".join(s["interval"] for s in signals)
 
-    if not entry:
-        print("  [1m] Could not calculate entry.")
-        return
+        # Dedup: unique per combo + direction + signal bar time
+        alert_key = f"{SYMBOL}_{combo_name}_{direction}_{best_signal['time']}"
+        if alert_key in sent_alerts:
+            continue
 
-    print(f"  [1m] Limit {direction}: {entry['limit_price']:,.1f} "
-          f"(current={entry['current_price']:,.1f}, pullback={entry['distance_pct']:.2f}%)")
-    print(f"       SL={entry['sl']:,.1f} | TP={entry['tp']:,.1f} | R:R={entry['rr_ratio']:.1f}")
+        any_signal = True
+        # Short combo label (e.g. "A" from "A: Trend Pullback (~65% WR)")
+        combo_short = combo_name.split(":")[0].strip()
 
-    # Dedup: unique key based on signal TF + direction + signal bar time
-    alert_key = f"{SYMBOL}_{direction}_{best_signal['time']}"
-    if alert_key in sent_alerts:
-        print("  (Already alerted for this signal)")
-        return
+        print(f"  [{tfs_with_signal}] Combo {combo_short}: {direction} "
+              f"(conf={best_signal['confidence']}, conds={len(best_signal['conditions'])})")
 
-    # Step 3: Build pattern and volume info
-    all_patterns = []
-    has_vol_confirm = False
-    for s in signals:
-        all_patterns.extend(s.get("patterns", []))
-        if s.get("volume_confirm"):
-            has_vol_confirm = True
-    # Deduplicate patterns
-    all_patterns = list(dict.fromkeys(all_patterns))
+        # Get 1m entry
+        entry = get_1m_entry(fetcher, SYMBOL, direction)
+        if not entry:
+            # Send without entry info
+            msg = (
+                f"{'━' * 25}\n"
+                f"<b>{'🟢 BUY' if direction == 'BUY' else '🔴 SELL'} — Combo {combo_short}</b>\n"
+                f"{'━' * 25}\n"
+                f"Symbol: <code>{SYMBOL}</code>\n"
+                f"Signal from: <b>{tfs_with_signal}</b>\n"
+                f"Confidence: {'⭐' * best_signal['confidence']} ({best_signal['confidence']}/3)\n"
+                f"Conditions: {', '.join(best_signal['conditions']) or 'Score-based'}\n"
+                f"Price: <code>{best_signal['price']:,.1f}</code>\n"
+                f"\n"
+                f"<i>RSI={best_signal['rsi']:.0f} | ADX={best_signal['adx']:.0f}</i>"
+            )
+        else:
+            msg = (
+                f"{'━' * 25}\n"
+                f"<b>{'🟢 BUY' if direction == 'BUY' else '🔴 SELL'} — Combo {combo_short}</b>\n"
+                f"{'━' * 25}\n"
+                f"Symbol: <code>{SYMBOL}</code>\n"
+                f"Signal from: <b>{tfs_with_signal}</b>\n"
+                f"Confidence: {'⭐' * best_signal['confidence']} ({best_signal['confidence']}/3)\n"
+                f"Conditions: {', '.join(best_signal['conditions']) or 'Score-based'}\n"
+                f"\n"
+                f"<b>📋 LIMIT ORDER:</b>\n"
+                f"  Entry: <code>{entry['limit_price']:,.1f}</code>\n"
+                f"  Current: <code>{entry['current_price']:,.1f}</code>\n"
+                f"  Distance: {entry['distance_pct']:.2f}%\n"
+                f"\n"
+                f"  SL: <code>{entry['sl']:,.1f}</code>\n"
+                f"  TP: <code>{entry['tp']:,.1f}</code>\n"
+                f"  R:R = <b>{entry['rr_ratio']:.1f}</b>\n"
+                f"\n"
+                f"<i>ATR(1m)={entry['atr_1m']:.1f} | "
+                f"RSI={best_signal['rsi']:.0f} | "
+                f"ADX={best_signal['adx']:.0f}</i>\n"
+                f"<i>Range: {entry['recent_low']:,.1f} - {entry['recent_high']:,.1f}</i>"
+            )
 
-    pattern_str = ", ".join(all_patterns) if all_patterns else "None"
-    vol_str = "Yes ✓" if has_vol_confirm else "No"
+        notifier.send(msg)
+        sent_alerts[alert_key] = time.time()
+        print(f"  -> ALERT SENT! (Combo {combo_short})")
 
-    # Step 4: Send Telegram alert
-    msg = (
-        f"{'━' * 25}\n"
-        f"<b>{'🟢 BUY' if direction == 'BUY' else '🔴 SELL'} SIGNAL</b>\n"
-        f"{'━' * 25}\n"
-        f"Symbol: <code>{SYMBOL}</code>\n"
-        f"Signal from: <b>{tfs_with_signal}</b>\n"
-        f"Confidence: {'⭐' * best_signal['confidence']} ({best_signal['confidence']}/3)\n"
-        f"Conditions: {', '.join(best_signal['conditions']) or 'Score-based'}\n"
-        f"\n"
-        f"<b>🕯 PATTERNS:</b>\n"
-        f"  {pattern_str}\n"
-        f"  Volume Confirm: <b>{vol_str}</b>\n"
-        f"\n"
-        f"<b>📋 LIMIT ORDER:</b>\n"
-        f"  Entry: <code>{entry['limit_price']:,.1f}</code>\n"
-        f"  Current: <code>{entry['current_price']:,.1f}</code>\n"
-        f"  Distance: {entry['distance_pct']:.2f}%\n"
-        f"\n"
-        f"  SL: <code>{entry['sl']:,.1f}</code>\n"
-        f"  TP: <code>{entry['tp']:,.1f}</code>\n"
-        f"  R:R = <b>{entry['rr_ratio']:.1f}</b>\n"
-        f"\n"
-        f"<i>ATR(1m)={entry['atr_1m']:.1f} | "
-        f"RSI={best_signal['rsi']:.0f} | "
-        f"ADX={best_signal['adx']:.0f}</i>\n"
-        f"<i>Range: {entry['recent_low']:,.1f} - {entry['recent_high']:,.1f}</i>"
-    )
-    notifier.send(msg)
-    sent_alerts[alert_key] = time.time()
-    print(f"  -> ALERT SENT!")
+    if not any_signal:
+        print("  No combo signal from any strategy.")
 
     # Cleanup old alerts (older than 1 hour)
     cutoff = time.time() - 3600
@@ -386,23 +470,10 @@ def main():
     parser = argparse.ArgumentParser(description="VN30F1M Multi-TF Signal Scanner")
     parser.add_argument("--once", action="store_true", help="Run once then exit")
     parser.add_argument("--interval", type=int, default=SCAN_INTERVAL, help="Scan interval (seconds)")
-    parser.add_argument("--combo", type=str, default=COMBO, help="Combo preset name")
     args = parser.parse_args()
 
-    combo_name = args.combo
-    if combo_name not in COMBO_PRESETS:
-        matches = [k for k in COMBO_PRESETS if combo_name.lower() in k.lower()]
-        if matches:
-            combo_name = matches[0]
-        else:
-            print(f"Unknown combo: {combo_name}")
-            print(f"Available: {list(COMBO_PRESETS.keys())}")
-            sys.exit(1)
-
-    enabled = get_enabled_from_combo(combo_name)
-    if not enabled:
-        print(f"Warning: No conditions enabled for '{combo_name}'. Using all conditions.")
-        enabled = {k: True for k in ALL_COND_KEYS}
+    # All combos with primary conditions
+    active_combos = [name for name, p in COMBO_PRESETS.items() if p.get("primary")]
 
     fetcher = DataFetcher()
     notifier = TelegramNotifier()
@@ -415,8 +486,8 @@ def main():
     print(f"Scanner started: {SYMBOL}")
     print(f"Signal TFs: {', '.join(SIGNAL_TIMEFRAMES)}")
     print(f"Entry TF: {ENTRY_TIMEFRAME}")
-    print(f"Combo: {combo_name}")
-    print(f"Conditions: {[COND_LABELS.get(k, k) for k in enabled]}")
+    print(f"Combos: {[n.split(':')[0].strip() for n in active_combos]}")
+    print(f"Patterns: Independent (all TFs)")
     print(f"Interval: {args.interval}s")
     print(f"Entry: Limit @ {ENTRY_ATR_PULLBACK}*ATR pullback | SL {SL_ATR_MULT}*ATR | TP {TP_ATR_MULT}*ATR")
     print("=" * 40)
@@ -424,15 +495,16 @@ def main():
     sent_alerts = {}
 
     if args.once:
-        run_scan(fetcher, notifier, enabled, combo_name, sent_alerts)
+        run_scan(fetcher, notifier, sent_alerts)
         return
 
     # Send startup notification
+    combo_labels = ", ".join(n.split(':')[0].strip() for n in active_combos)
     notifier.send(
         f"<b>Scanner Started</b>\n"
         f"Symbol: <code>{SYMBOL}</code>\n"
         f"Signal: {', '.join(SIGNAL_TIMEFRAMES)} → Entry: {ENTRY_TIMEFRAME}\n"
-        f"Strategy: {combo_name}\n"
+        f"Combos: {combo_labels} + Patterns\n"
         f"Interval: {args.interval}s\n"
         f"Limit: {ENTRY_ATR_PULLBACK}×ATR pullback | R:R {TP_ATR_MULT/SL_ATR_MULT:.0f}:1"
     )
@@ -445,7 +517,7 @@ def main():
                 time.sleep(60)
                 continue
 
-            run_scan(fetcher, notifier, enabled, combo_name, sent_alerts)
+            run_scan(fetcher, notifier, sent_alerts)
         except KeyboardInterrupt:
             print("\nStopped by user.")
             break
