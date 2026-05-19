@@ -1,39 +1,62 @@
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # STRATEGY CONFIGURATION - VN30F1M Scanner
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # Edit this file to change scanner behavior.
 # After editing, run: py scanner.py --once (to test)
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
-# ─── GENERAL ──────────────────────────────────────────────────────
+# --- GENERAL ------------------------------------------------------
 symbol: VN30F1M
-scan_interval: 60           # seconds (= 1 candle on 1m)
+scan_interval: 35           # seconds
 
-# ─── TIMEFRAMES ──────────────────────────────────────────────────
-# Step 1: Scan these for signal direction
+# --- TIMEFRAMES --------------------------------------------------
+# All 3 timeframes scanned independently for signal direction
 signal_timeframes:
+  - 1m
   - 5m
   - 15m
 
-# Step 2: Use this to find optimal entry
+# Multi-TF agreement scoring:
+#   1 TF signal = NORMAL (notify)
+#   2 TF agree  = STRONG (notify + highlight)
+#   3 TF agree  = SUPER STRONG (notify + urgent)
+
+# Entry uses the lowest TF with signal for precise timing
 entry_timeframe: 1m
 
-# ─── TRADING HOURS (Vietnam, Mon-Fri) ────────────────────────────
+# --- TRADING HOURS (Vietnam, Mon-Fri) ----------------------------
 market_open: "09:00"
 market_close: "14:30"
 
-# ─── ACTIVE COMBO PRESET ─────────────────────────────────────────
-# Choose one: A, B, C, D, E, F, G, H, J, K, L, or Custom
-active_combo: "D: Trend Confirmation (safest)"
+# --- ACTIVE COMBO PRESET -----------------------------------------
+# Now scans ALL combos independently (no single active_combo needed)
+active_combo: "all"
 
-# ─── ENTRY / RISK MANAGEMENT ─────────────────────────────────────
+# --- COMBO-TF EFFECTIVENESS (from 100-day backtest) ---------------
+# Each combo only runs on timeframes where it has proven profitable.
+# Average PnL per combo per TF (pts over 100 days):
+#   A: 1m=+22.5, 5m=+51.7, 15m=-33.0 => skip 15m
+#   B: 1m=-1.7, 5m=-39.5, 15m=+3.5   => only 15m
+#   C: 1m=+10.7, 5m=+36.8, 15m=+18.5 => all TFs
+#   K: 1m=+0.6, 5m=-0.2, 15m=+15.4   => only 15m
+#   F: 1m=+1.3, 5m=+5.9, 15m=+0.6    => only 5m
+#   G: 1m=+48.0, 5m=+45.7, 15m=+33.8 => all TFs
+combo_tf_map:
+  A: [1m, 5m]
+  B: [15m]
+  C: [1m, 5m, 15m]
+  K: [15m]
+  F: [5m]
+  G: [1m, 5m, 15m]
+
+# --- ENTRY / RISK MANAGEMENT -------------------------------------
 entry:
-  atr_pullback: 0.5         # Limit entry = price ± (this × ATR_1m)
-  sl_atr_mult: 1.5          # Stop Loss = entry ± (this × ATR_1m)
-  tp_atr_mult: 3.0          # Take Profit = entry ± (this × ATR_1m)
+  atr_pullback: 0.5         # Limit entry = price +/- (this x ATR_1m)
+  sl_atr_mult: 1.5          # Stop Loss = entry +/- (this x ATR_1m)
+  tp_atr_mult: 3.0          # Take Profit = entry +/- (this x ATR_1m)
   # => R:R = tp/sl = 3.0/1.5 = 2:1
 
-# ─── PATTERN DETECTION (reported in alerts) ───────────────────────
+# --- PATTERN DETECTION (reported in alerts) -----------------------
 # These patterns are detected and reported but don't trigger signals.
 # They add context to help you decide whether to take the trade.
 patterns:
@@ -43,7 +66,7 @@ patterns:
   head_and_shoulders: true  # H&S top / Inverse H&S bottom
   volume_confirm: true      # Volume > 1.5x avg on signal bar
 
-# ─── INDICATOR PARAMETERS ────────────────────────────────────────
+# --- INDICATOR PARAMETERS ----------------------------------------
 indicators:
   fast_ma: 10               # Fast SMA period
   slow_ma: 20               # Slow SMA period
@@ -64,9 +87,9 @@ indicators:
   williams_r_period: 14     # Williams %R period
   donchian_period: 20       # Donchian channel period
 
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # COMBO PRESETS - Signal generation logic
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # How it works:
 #   - "primary": At least 1 must fire to trigger a signal
 #   - "confirm": Each one that fires adds +1 confidence (max 3)
@@ -87,15 +110,15 @@ indicators:
 #   hammer_star    - Hammer (bullish) / Shooting Star (bearish)
 #   adx_di         - ADX > 20 and DI+/DI- crossover
 #   sr_breakout    - Break above/below 20-bar high/low
-#   sr_atr         - Near support/resistance ± ATR zone
+#   sr_atr         - Near support/resistance +/- ATR zone
 #   macd_filter    - [GATE] Block BUY if MACD < signal, block SELL if MACD > signal
 #   vol_color_filter - [GATE] Block BUY on red volume, block SELL on green volume
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
 combos:
   A_Trend_Pullback:
     name: "A: Trend Pullback (~65% WR)"
-    desc: "EMA Ribbon aligned + pullback to EMA21. MACD + ADX confirm."
+    desc: "EMA Ribbon aligned + pullback to EMA21. Gated by MACD + vol color."
     primary:
       - ema_ribbon
       - ema_pullback
@@ -103,10 +126,13 @@ combos:
       - adx_di
       - macd_cross
       - macd_hist_rev
+    gate:
+      - macd_filter
+      - vol_color_filter
 
   B_Momentum_Breakout:
     name: "B: Momentum Breakout (R:R 3:1)"
-    desc: "BB Squeeze breakout + high/low break. ADX + Volume confirm."
+    desc: "BB Squeeze breakout + high/low break. Gated by MACD direction."
     primary:
       - bb_squeeze
       - sr_breakout
@@ -114,10 +140,12 @@ combos:
       - adx_di
       - macd_hist_rev
       - inside_bar
+    gate:
+      - macd_filter
 
   C_Mean_Reversion:
     name: "C: Mean Reversion (~60% WR)"
-    desc: "BB touch + Stochastic extreme. RSI Div + candle patterns confirm."
+    desc: "BB touch + Stochastic extreme. No gate (mean-rev buys on red candles naturally)."
     primary:
       - bb_bounce
       - stoch_cross
@@ -126,20 +154,9 @@ combos:
       - hammer_star
       - engulfing
 
-  D_Trend_Confirmation:
-    name: "D: Trend Confirmation (safest)"
-    desc: "SMA Cross + MACD Cross agree. EMA Ribbon + ADX confirm trend."
-    primary:
-      - sma_cross
-      - macd_cross
-    confirm:
-      - ema_ribbon
-      - adx_di
-      - macd_hist_rev
-
   K_Smart_Mean_Reversion:
     name: "K: Smart Mean Reversion"
-    desc: "Same as C but with 2 gates to filter bad signals."
+    desc: "Same as C but with MACD gate only to filter counter-trend entries."
     primary:
       - bb_bounce
       - stoch_cross
@@ -149,31 +166,23 @@ combos:
       - engulfing
     gate:
       - macd_filter
-      - vol_color_filter
-
-  E_Ichimoku_Trend:
-    name: "E: Ichimoku Trend (Asia)"
-    desc: "Tenkan/Kijun cross + price above/below cloud. Very effective in Asian trending markets."
-    primary:
-      - ichimoku_cross
-    confirm:
-      - supertrend_flip
-      - adx_di
-      - macd_hist_rev
 
   F_Supertrend_Momentum:
     name: "F: Supertrend Momentum"
-    desc: "Supertrend direction flip + ADX strong trend confirmation. Clean trend-following."
+    desc: "Supertrend flip + ADX. Gated by MACD+Vol to filter choppy flips."
     primary:
       - supertrend_flip
     confirm:
       - adx_di
       - ema_ribbon
       - macd_cross
+    gate:
+      - macd_filter
+      - vol_color_filter
 
   G_MultiOscillator_Reversal:
     name: "G: Multi-Oscillator Reversal"
-    desc: "CCI + Williams %R both in extreme zones -> mean reversion signal."
+    desc: "CCI + Williams %R extreme. Gated by vol color to confirm reversal candle."
     primary:
       - cci_extreme
       - williams_extreme
@@ -181,39 +190,5 @@ combos:
       - stoch_cross
       - bb_bounce
       - rsi_div
-
-  H_VWAP_Donchian_Breakout:
-    name: "H: VWAP + Donchian Breakout"
-    desc: "Donchian channel breakout + VWAP deviation confirms direction. Intraday breakout."
-    primary:
-      - donchian_break
-    confirm:
-      - vwap_dev
-      - adx_di
-      - macd_hist_rev
     gate:
-      - macd_filter
-
-  J_PSAR_Ichimoku_Flip:
-    name: "J: PSAR + Ichimoku Flip"
-    desc: "Parabolic SAR flips direction + Ichimoku cloud confirms. High precision entries."
-    primary:
-      - psar_flip
-      - ichimoku_cross
-    confirm:
-      - supertrend_flip
-      - adx_di
-      - ema_ribbon
-
-  L_PVT_Volume_Confirm:
-    name: "L: PVT Volume Confirm"
-    desc: "EMA Ribbon trend + MACD momentum, gated by PVT direction."
-    primary:
-      - ema_ribbon
-      - macd_cross
-    confirm:
-      - adx_di
-      - supertrend_flip
-      - macd_hist_rev
-    gate:
-      - pvt_confirm
+      - vol_color_filter

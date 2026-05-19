@@ -1,10 +1,10 @@
 """
 Signal Conditions & Strategy Formulas
 ======================================
-Tất cả công thức tín hiệu và chiến lược được định nghĩa tại đây.
-File này tách riêng để dễ quản lý, xem lại và chỉnh sửa công thức.
+All signal formulas and strategy logic defined here.
+Separated for easy management and review.
 
-Nguồn tham khảo:
+References:
 - Investopedia: https://www.investopedia.com
 - ATR: https://www.investopedia.com/terms/a/atr.asp
 - MACD: https://www.investopedia.com/terms/m/macd.asp
@@ -20,29 +20,29 @@ import pandas_ta as ta
 
 # ===================== DYNAMIC S/R CALCULATOR =====================
 def calculate_dynamic_sr(df: pd.DataFrame) -> pd.DataFrame:
-    """Tính Support/Resistance động kết hợp nhiều phương pháp.
+    """Calculate Dynamic Support/Resistance using multiple methods.
 
-    Phương pháp kết hợp:
-    ─────────────────────
-    1. Swing Points (Fractal):  Tìm đỉnh/đáy cục bộ thực sự (N=5 bars mỗi bên)
-    2. EMA Confluence:          EMA5/12/21 là S/R động — nếu swing point gần EMA → mạnh hơn
-    3. ATR Zone:                S/R là VÙNG chứ không phải 1 điểm (± 0.5×ATR)
-    4. Volume Weight:           Swing point có volume cao → S/R mạnh hơn
-    5. Recency Weight:          Swing point gần đây → quan trọng hơn
-    6. Cluster Scoring:         Nhiều swing points cùng vùng → S/R rất mạnh
+    Methods combined:
+    ---------------------
+    1. Swing Points (Fractal):  Find true local highs/lows (N=5 bars each side)
+    2. EMA Confluence:          EMA5/12/21 as dynamic S/R -- swing near EMA = stronger
+    3. ATR Zone:                S/R is a ZONE not a point (+/- 0.5xATR)
+    4. Volume Weight:           High volume swing point = stronger S/R
+    5. Recency Weight:          Recent swing points = more important
+    6. Cluster Scoring:         Multiple swings in same zone = very strong S/R
 
     Output columns:
-    ───────────────
-    - dynamic_resistance: mức kháng cự gần nhất (weighted by strength)
-    - dynamic_support:    mức hỗ trợ gần nhất (weighted by strength)
-    - sr_strength:        độ mạnh của S/R gần nhất (1-5 scale)
+    ---------------
+    - dynamic_resistance: nearest resistance level (weighted by strength)
+    - dynamic_support:    nearest support level (weighted by strength)
+    - sr_strength:        S/R strength score (1-5 scale)
     """
     n = len(df)
-    swing_window = 5  # bars mỗi bên để xác định swing point
+    swing_window = 5  # bars each side to confirm swing point
 
-    # --- Step 1: Tìm Swing Highs & Swing Lows (Fractal method) ---
-    # Swing High: bar có high >= high của N bars trước VÀ N bars sau
-    # Swing Low: bar có low <= low của N bars trước VÀ N bars sau
+    # --- Step 1: Find Swing Highs & Swing Lows (Fractal method) ---
+    # Swing High: bar with high >= high of N bars before AND N bars after
+    # Swing Low: bar with low <= low of N bars before AND N bars after
     swing_highs = pd.Series(np.nan, index=df.index, dtype=float)
     swing_lows = pd.Series(np.nan, index=df.index, dtype=float)
     swing_high_vol = pd.Series(np.nan, index=df.index, dtype=float)
@@ -73,8 +73,8 @@ def calculate_dynamic_sr(df: pd.DataFrame) -> pd.DataFrame:
             swing_lows.iloc[i] = lows[i]
             swing_low_vol.iloc[i] = volumes[i]
 
-    # --- Step 2: Cho mỗi bar, tìm S/R động gần nhất ---
-    # Sử dụng rolling window 50 bars gần nhất để tìm swing points
+    # --- Step 2: For each bar, find nearest dynamic S/R ---
+    # Use rolling window of 50 nearest bars to find swing points
     atr_vals = df["atr"].values
     ema5_vals = df["ema5"].values
     ema12_vals = df["ema12"].values
@@ -85,7 +85,7 @@ def calculate_dynamic_sr(df: pd.DataFrame) -> pd.DataFrame:
     dynamic_sup = pd.Series(np.nan, index=df.index, dtype=float)
     sr_strength_col = pd.Series(0.0, index=df.index, dtype=float)
 
-    lookback = 50  # bars nhìn lại để tìm swing points
+    lookback = 50  # bars to look back for swing points
 
     for i in range(swing_window + 1, n):
         current_close = close_vals[i]
@@ -93,7 +93,7 @@ def calculate_dynamic_sr(df: pd.DataFrame) -> pd.DataFrame:
         if current_atr == 0:
             current_atr = current_close * 0.02
 
-        zone_radius = 0.5 * current_atr  # ATR zone: ± 0.5×ATR
+        zone_radius = 0.5 * current_atr  # ATR zone: +/- 0.5xATR
 
         # Collect swing highs above current price (resistance candidates)
         # Collect swing lows below current price (support candidates)
@@ -114,7 +114,7 @@ def calculate_dynamic_sr(df: pd.DataFrame) -> pd.DataFrame:
                 if not np.isnan(sv) and not np.isnan(df["vol_sma"].iloc[j]) and df["vol_sma"].iloc[j] > 0:
                     vol_weight = min(2.0, sv / df["vol_sma"].iloc[j])  # cap 2x
 
-                # EMA confluence: if swing point is near an EMA → bonus
+                # EMA confluence: if swing point is near an EMA -> bonus
                 ema_bonus = 0.0
                 for ema_val in [ema5_vals[j], ema12_vals[j], ema21_vals[j]]:
                     if not np.isnan(ema_val) and abs(sh - ema_val) <= zone_radius:
@@ -295,63 +295,39 @@ def compute_volume_profile(df: pd.DataFrame, period: int = 100, vol_pct: float =
 COMBO_PRESETS = {
     "Custom": {"primary": [], "confirm": []},
     "A: Trend Pullback (~65% WR)": {
-        "desc": "EMA Ribbon aligned + price pullback to EMA21. MACD + ADX confirm strong trend.",
+        "desc": "EMA Ribbon aligned + price pullback to EMA21. Gated by MACD momentum + vol color.",
         "primary": ["ema_ribbon", "ema_pullback"],
         "confirm": ["adx_di", "macd_cross", "macd_hist_rev"],
-    },
-    "B: Momentum Breakout (R:R 3:1)": {
-        "desc": "BB Squeeze breakout + 20-day high/low break. ADX + Volume confirm momentum.",
-        "primary": ["bb_squeeze", "sr_breakout"],
-        "confirm": ["adx_di", "macd_hist_rev", "inside_bar"],
-    },
-    "C: Mean Reversion (~60% WR)": {
-        "desc": "Price touches BB + Stochastic extreme -> mean reversion. RSI Div + Hammer confirm reversal.",
-        "primary": ["bb_bounce", "stoch_cross"],
-        "confirm": ["rsi_div", "hammer_star", "engulfing"],
-    },
-    "D: Trend Confirmation (safest)": {
-        "desc": "SMA Cross + MACD Cross agree -> new trend. EMA Ribbon + ADX confirm strong trend.",
-        "primary": ["sma_cross", "macd_cross"],
-        "confirm": ["ema_ribbon", "adx_di", "macd_hist_rev"],
-    },
-    "K: Smart Mean Reversion": {
-        "desc": "Base from C + 2 gates: (1) no BUY when MACD below signal, no SELL when MACD above signal. "
-                "(2) no BUY on red volume, no SELL on green volume.",
-        "primary": ["bb_bounce", "stoch_cross"],
-        "confirm": ["rsi_div", "hammer_star", "engulfing"],
         "gate": ["macd_filter", "vol_color_filter"],
     },
-    "E: Ichimoku Trend (Asia)": {
-        "desc": "Tenkan/Kijun cross + price above/below cloud. Very effective in Asian trending markets.",
-        "primary": ["ichimoku_cross"],
-        "confirm": ["supertrend_flip", "adx_di", "macd_hist_rev"],
-    },
-    "F: Supertrend Momentum": {
-        "desc": "Supertrend direction flip + ADX strong trend confirmation. Clean trend-following.",
-        "primary": ["supertrend_flip"],
-        "confirm": ["adx_di", "ema_ribbon", "macd_cross"],
-    },
-    "G: Multi-Oscillator Reversal": {
-        "desc": "CCI + Williams %R both in extreme zone -> mean reversion. Strong oversold/overbought.",
-        "primary": ["cci_extreme", "williams_extreme"],
-        "confirm": ["stoch_cross", "bb_bounce", "rsi_div"],
-    },
-    "H: VWAP + Donchian Breakout": {
-        "desc": "Price breaks Donchian channel + VWAP deviation confirms direction. Intraday breakout.",
-        "primary": ["donchian_break"],
-        "confirm": ["vwap_dev", "adx_di", "macd_hist_rev"],
+    "B: Momentum Breakout (R:R 3:1)": {
+        "desc": "BB Squeeze breakout + 20-day high/low break. Gated by MACD direction to avoid false breakouts.",
+        "primary": ["bb_squeeze", "sr_breakout"],
+        "confirm": ["adx_di", "macd_hist_rev", "inside_bar"],
         "gate": ["macd_filter"],
     },
-    "J: PSAR + Ichimoku Flip": {
-        "desc": "Parabolic SAR flips direction confirmed by Ichimoku cloud position. High precision entries.",
-        "primary": ["psar_flip", "ichimoku_cross"],
-        "confirm": ["supertrend_flip", "adx_di", "ema_ribbon"],
+    "C: Mean Reversion (~60% WR)": {
+        "desc": "Price touches BB + Stochastic extreme -> mean reversion. No gate (mean-rev buys on red candles).",
+        "primary": ["bb_bounce", "stoch_cross"],
+        "confirm": ["rsi_div", "hammer_star", "engulfing"],
     },
-    "L: PVT Volume Confirm": {
-        "desc": "EMA Ribbon trend + MACD momentum, gated by PVT direction (volume must confirm price move).",
-        "primary": ["ema_ribbon", "macd_cross"],
-        "confirm": ["adx_di", "supertrend_flip", "macd_hist_rev"],
-        "gate": ["pvt_confirm"],
+    "K: Smart Mean Reversion": {
+        "desc": "Base from C + MACD gate only: no BUY when MACD below signal, no SELL when MACD above signal.",
+        "primary": ["bb_bounce", "stoch_cross"],
+        "confirm": ["rsi_div", "hammer_star", "engulfing"],
+        "gate": ["macd_filter"],
+    },
+    "F: Supertrend Momentum": {
+        "desc": "Supertrend direction flip + ADX strong trend. Gated by MACD+Vol to filter choppy flips.",
+        "primary": ["supertrend_flip"],
+        "confirm": ["adx_di", "ema_ribbon", "macd_cross"],
+        "gate": ["macd_filter", "vol_color_filter"],
+    },
+    "G: Multi-Oscillator Reversal": {
+        "desc": "CCI + Williams %R both in extreme zone. Gated by vol color to confirm reversal candle.",
+        "primary": ["cci_extreme", "williams_extreme"],
+        "confirm": ["stoch_cross", "bb_bounce", "rsi_div"],
+        "gate": ["vol_color_filter"],
     },
 }
 
@@ -394,8 +370,8 @@ def analyze_signal_performance(sig_df, atr_sl_mult=1.5, atr_tp_mult=3.0, max_hol
     Parameters:
     -----------
     sig_df : DataFrame with 'signal', 'close', 'high', 'low', 'atr' columns
-    atr_sl_mult : Stop Loss = entry ± (mult × ATR)
-    atr_tp_mult : Take Profit = entry ± (mult × ATR)
+    atr_sl_mult : Stop Loss = entry +/- (mult x ATR)
+    atr_tp_mult : Take Profit = entry +/- (mult x ATR)
     max_hold : Maximum bars to hold before forced exit
 
     Returns: dict with 'rows', 'total', 'wins', 'losses', 'win_rate', etc. or None
@@ -544,7 +520,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df["bb_upper"] = df["bb_mid"] = df["bb_lower"] = df["close"]
         df["bb_width"] = 0
 
-    # BB Width normalized (% of mid) — dùng để detect squeeze
+    # BB Width normalized (% of mid) -- used to detect squeeze
     df["bb_width_pct"] = df["bb_width"] / df["bb_mid"].replace(0, np.nan)
     df["bb_squeeze_flag"] = df["bb_width_pct"] <= df["bb_width_pct"].rolling(20).quantile(0.2)
 
@@ -705,7 +681,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
     # ==================== CONDITIONS ====================
 
     # --- 1. SMA Cross (Golden Cross / Death Cross) ---
-    # Nguồn: Investopedia - Golden Cross is lagging → confirm with other indicators
+    # Ref: Investopedia - Golden Cross is lagging -> confirm with other indicators
     # Logic: SMA fast crosses SMA slow + RSI 30-70 filter (avoid extreme zones)
     if enabled.get("sma_cross", False):
         sma_golden = (df["sma_f"] > df["sma_s"]) & (df["sma_f"].shift(1) <= df["sma_s"].shift(1))
@@ -718,7 +694,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[_sell, "_s_sma_cross"] = 1
 
     # --- 2. MACD Cross (Signal Line Crossover) ---
-    # Nguồn: Investopedia - "Crossovers more reliable when conform to prevailing trend"
+    # Ref: Investopedia - "Crossovers more reliable when conform to prevailing trend"
     # Logic: MACD line crosses signal line. Accept: trend-confirming OR reversal near zero
     if enabled.get("macd_cross", False):
         macd_buy = (df["macd_line"] > df["macd_sig"]) & (df["macd_line"].shift(1) <= df["macd_sig"].shift(1))
@@ -751,8 +727,8 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[_sell, "_s_ema_pullback"] = 1
 
     # --- 4. Bollinger Squeeze Breakout ---
-    # Logic: BB width at 20-period minimum (squeeze) → breakout khi giá vượt BB
-    # Squeeze = low volatility → expansion expected
+    # Logic: BB width at 20-period minimum (squeeze) -> breakout when price exceeds BB
+    # Squeeze = low volatility -> expansion expected
     if enabled.get("bb_squeeze", False):
         bb_width_min = df["bb_width"].rolling(window=20).min()
         squeeze = df["bb_width"].shift(1) <= (bb_width_min.shift(1) * 1.05)
@@ -766,7 +742,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[_sell, "_s_bb_squeeze"] = 1
 
     # --- 5. RSI Divergence ---
-    # Logic: Price makes lower low but RSI makes higher low (bullish div) → momentum weakening
+    # Logic: Price makes lower low but RSI makes higher low (bullish div) -> momentum weakening
     # Lookback 10 bars, RSI < 45 for buy / > 55 for sell
     if enabled.get("rsi_div", False):
         lookback = 10
@@ -793,7 +769,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[hist_turn_down, "_s_macd_hist_rev"] = 1
 
     # --- 7. Stochastic Extreme Cross ---
-    # Nguồn: Investopedia - Overbought >80, Oversold <20
+    # Ref: Investopedia - Overbought >80, Oversold <20
     # Logic: K crosses D when LEAVING extreme zone (not entering)
     if enabled.get("stoch_cross", False):
         stoch_buy = (df["stoch_k"] > df["stoch_d"]) & (df["stoch_k"].shift(1) <= df["stoch_d"].shift(1)) & (df["stoch_k"].shift(1) < 20)
@@ -804,7 +780,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[stoch_sell, "_s_stoch_cross"] = 1
 
     # --- 8. Bollinger Bounce ---
-    # Logic: Price touches lower BB in uptrend + RSI < 35 → oversold bounce
+    # Logic: Price touches lower BB in uptrend + RSI < 35 -> oversold bounce
     # RSI threshold tightened for stronger confirmation
     if enabled.get("bb_bounce", False):
         touch_lower = df["low"] <= df["bb_lower"]
@@ -818,7 +794,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
 
     # --- 9. Engulfing Candle ---
     # Logic: Current candle completely engulfs previous candle body
-    # Bullish engulfing + RSI < 50 → reversal from oversold
+    # Bullish engulfing + RSI < 50 -> reversal from oversold
     if enabled.get("engulfing", False):
         body = df["close"] - df["open"]
         prev_body = body.shift(1)
@@ -847,7 +823,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[_sell, "_s_ema_ribbon"] = 1
 
     # --- 11. Inside Bar Breakout ---
-    # Logic: Consolidation bar (range inside previous bar) → breakout in trend direction
+    # Logic: Consolidation bar (range inside previous bar) -> breakout in trend direction
     # Win rate ~55-60%, R:R ~3:1
     if enabled.get("inside_bar", False):
         prev_high = df["high"].shift(1)
@@ -864,8 +840,8 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
 
     # --- 12. Hammer / Shooting Star ---
     # Logic: Reversal candle at key support/resistance level
-    # Hammer: long lower shadow ≥2x body, near BB lower or EMA21 + RSI < 45
-    # Star: long upper shadow ≥2x body, near BB upper or EMA21 + RSI > 55
+    # Hammer: long lower shadow >=2x body, near BB lower or EMA21 + RSI < 45
+    # Star: long upper shadow >=2x body, near BB upper or EMA21 + RSI > 55
     if enabled.get("hammer_star", False):
         body_size = (df["close"] - df["open"]).abs()
         candle_range = df["high"] - df["low"]
@@ -883,8 +859,8 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[_sell, "_s_hammer_star"] = 1
 
     # --- 13. ADX Trend Strength + DI Cross ---
-    # Nguồn: Investopedia - ADX > 25 = trending market
-    # Logic: +DI crosses -DI when ADX > 25 → trend confirmed
+    # Ref: Investopedia - ADX > 25 = trending market
+    # Logic: +DI crosses -DI when ADX > 25 -> trend confirmed
     if enabled.get("adx_di", False):
         strong_trend = df["adx"] > 25
         di_cross_up = (df["plus_di"] > df["minus_di"]) & (df["plus_di"].shift(1) <= df["minus_di"].shift(1))
@@ -906,31 +882,31 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[_buy, "_b_sr_breakout"] = 1
         df.loc[_sell, "_s_sr_breakout"] = 1
 
-    # --- 15. Smart S/R ± ATR (Multi-Factor Breakout) ---
-    # Phiên bản thông minh: dùng Dynamic S/R (swing + EMA + volume + cluster)
+    # --- 15. Smart S/R +/- ATR (Multi-Factor Breakout) ---
+    # Smart version: uses Dynamic S/R (swing + EMA + volume + cluster)
     #
-    # CÔNG THỨC:
+    # FORMULA:
     #   Resistance = dynamic_resistance (multi-method: swing fractal + EMA confluence
     #                + volume weight + recency + cluster scoring)
-    #   Support    = dynamic_support (tương tự)
+    #   Support    = dynamic_support (same method)
     #
-    #   BUY khi TẤT CẢ thỏa:
-    #     1. Price > Dynamic Resistance + ATR×buffer  (breakout qua vùng S/R thật)
-    #     2. BB Squeeze trước đó                     (tích lũy → nổ)
-    #     3. Z-score < 2.5                            (chưa quá xa mean → còn room)
-    #     4. EMA Slope > 0                            (xu hướng đang tăng tốc)
+    #   BUY when ALL conditions met:
+    #     1. Price > Dynamic Resistance + ATRxbuffer  (breakout past real S/R zone)
+    #     2. BB Squeeze prior                        (consolidation -> explosion)
+    #     3. Z-score < 2.5                            (not too far from mean -> room left)
+    #     4. EMA Slope > 0                            (trend accelerating)
     #     5. EMA5 > EMA12                             (short-term momentum bullish)
-    #     6. BB Width expanding                       (volatility đang nở = breakout thật)
+    #     6. BB Width expanding                       (volatility expanding = real breakout)
     #
-    #   SELL khi TẤT CẢ thỏa (ngược lại)
+    #   SELL when ALL conditions met (inverse)
     #
-    # S/R được tính bởi calculate_dynamic_sr():
-    #   - Swing Points (fractal 5-bar): đỉnh/đáy cục bộ thực sự
-    #   - EMA Confluence: swing gần EMA5/12/21 → bonus điểm
-    #   - ATR Zone: cluster swing points trong ±0.5×ATR thành 1 vùng
-    #   - Volume Weight: swing point volume cao → S/R mạnh hơn (cap 2x)
-    #   - Recency: swing gần đây quan trọng hơn (linear decay 50 bars)
-    #   - Cluster: nhiều swing cùng vùng → score × (1 + 0.2 × count)
+    # S/R calculated by calculate_dynamic_sr():
+    #   - Swing Points (fractal 5-bar): real local highs/lows
+    #   - EMA Confluence: swing near EMA5/12/21 -> bonus score
+    #   - ATR Zone: cluster swing points within +/-0.5xATR into 1 zone
+    #   - Volume Weight: high volume swing point -> stronger S/R (cap 2x)
+    #   - Recency: recent swings weighted more (linear decay 50 bars)
+    #   - Cluster: multiple swings in same zone -> score x (1 + 0.2 x count)
     if enabled.get("sr_atr", False):
         # Factor 1: Price breaks Dynamic S/R + ATR buffer
         has_res = df["dynamic_resistance"].notna()
@@ -970,8 +946,8 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[_sell, "_s_sr_atr"] = 1
 
     # --- 16. MACD Momentum Filter (GATE) ---
-    # Logic: Không BUY khi MACD line (xanh) < Signal line (cam) → momentum bearish
-    #        Không SELL khi MACD line (xanh) > Signal line (cam) → momentum bullish
+    # Logic: Do NOT BUY when MACD line < Signal line -> momentum bearish
+    #        Do NOT SELL when MACD line > Signal line -> momentum bullish
     if enabled.get("macd_filter", False):
         buy_ok = df["macd_line"] >= df["macd_sig"]
         sell_ok = df["macd_line"] <= df["macd_sig"]
@@ -1106,7 +1082,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
     # 3-candle bullish reversal at bottom
     # 1st (i-2): Long bearish (red)
     # 2nd (i-1): Short body + opens near/below 1st close (relaxed gap for intraday)
-    # 3rd (i):   Bullish, body > short, close penetrates ≥30% into 1st body
+    # 3rd (i):   Bullish, body > short, close penetrates >=30% into 1st body
     _c1_long_bear = _body_long.shift(2) & (_body.shift(2) < 0)
     # Relaxed gap: 2nd candle opens at or below 1st candle's close (no strict gap needed intraday)
     _c2_upper = pd.concat([_open.shift(1), _close.shift(1)], axis=1).max(axis=1)
@@ -1126,7 +1102,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
     # 3-candle bearish reversal at top
     # 1st (i-2): Long bullish (green)
     # 2nd (i-1): Short body + opens near/above 1st close
-    # 3rd (i):   Bearish, body > short, close penetrates ≥30% into 1st body
+    # 3rd (i):   Bearish, body > short, close penetrates >=30% into 1st body
     _c1_long_bull = _body_long.shift(2) & (_body.shift(2) > 0)
     _c1_close_bull = _close.shift(2)
     _gap_up = _open.shift(1) >= _c1_close_bull  # open of 2nd >= close of 1st (bullish continuation)
