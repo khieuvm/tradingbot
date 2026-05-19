@@ -18,6 +18,12 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Force UTF-8 on Windows console to handle emoji/Unicode from vnstock banner
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import pandas as pd
 import yaml
 
@@ -26,6 +32,7 @@ from src.data_fetcher import DataFetcher
 from src.signals import (
     COMBO_PRESETS, COND_LABELS, ALL_COND_KEYS,
     generate_combined_signals,
+    compute_volume_profile,
 )
 from src.notifier import TelegramNotifier
 
@@ -143,24 +150,29 @@ def get_enabled_from_combo(combo_name: str) -> dict:
 
 
 def scan_timeframe(fetcher: DataFetcher, symbol: str, interval: str,
-                   enabled: dict, combo_name: str) -> tuple[dict | None, pd.DataFrame | None]:
-    """Scan a single timeframe for signal. Returns (signal_info, sig_df) or (None, sig_df)."""
-    now = vn_now()
-    if interval in ("1m", "5m"):
-        days_back = 5
-    elif interval == "15m":
-        days_back = 10
-    else:
-        days_back = 30
+                   enabled: dict, combo_name: str,
+                   df: pd.DataFrame = None) -> tuple[dict | None, pd.DataFrame | None]:
+    """Scan a single timeframe for signal. Returns (signal_info, sig_df) or (None, sig_df).
 
-    start = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    end = now.strftime("%Y-%m-%d")
+    If `df` is provided, skip fetching and use it directly (cache-friendly).
+    """
+    if df is None:
+        now = vn_now()
+        if interval in ("1m", "5m"):
+            days_back = 5
+        elif interval == "15m":
+            days_back = 10
+        else:
+            days_back = 30
 
-    try:
-        df = fetcher.get_futures_ohlcv(symbol, start, end, interval=interval)
-    except Exception as e:
-        print(f"  [{interval}] Error: {e}")
-        return None, None
+        start = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        end = now.strftime("%Y-%m-%d")
+
+        try:
+            df = fetcher.get_futures_ohlcv(symbol, start, end, interval=interval)
+        except Exception as e:
+            print(f"  [{interval}] Error: {e}")
+            return None, None
 
     if df is None or df.empty or len(df) < 30:
         print(f"  [{interval}] Insufficient data ({len(df) if df is not None else 0} bars)")
@@ -270,10 +282,11 @@ def scan_patterns(fetcher: DataFetcher, symbol: str, interval: str,
 
 
 def get_1m_entry(fetcher: DataFetcher, symbol: str, direction: str) -> dict | None:
-    """Use 1m chart to find optimal Limit Order entry based on ATR pullback.
+    """Use 1m chart to find optimal Limit Order entry.
 
-    For BUY: Limit = current_price - pullback (buy the dip)
-    For SELL: Limit = current_price + pullback (sell the rally)
+    Implements tiered TP/SL:
+    - TP1=immediate (+1xATR), TP2=volume target (VP VAH/VAL or VWAP), TP3=extended
+    - Stepped SL: initial -> breakeven after TP1 hit
     """
     now = vn_now()
     start = (now - timedelta(days=3)).strftime("%Y-%m-%d")
@@ -288,52 +301,107 @@ def get_1m_entry(fetcher: DataFetcher, symbol: str, direction: str) -> dict | No
     if df is None or df.empty or len(df) < 30:
         return None
 
-    # Calculate ATR on 1m
     import pandas_ta as ta
     df["atr_1m"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+
+    # VWAP on 1m data
+    try:
+        _df_v = df.copy()
+        if "time" in _df_v.columns and not isinstance(_df_v.index, pd.DatetimeIndex):
+            _df_v.index = pd.to_datetime(_df_v["time"])
+        _vwap = ta.vwap(_df_v["high"], _df_v["low"], _df_v["close"],
+                        _df_v["volume"].astype(float))
+        df["vwap_1m"] = _vwap.values if _vwap is not None else df["close"].values
+    except Exception:
+        df["vwap_1m"] = df["close"]
 
     last = df.iloc[-1]
     price = float(last["close"])
     atr_1m = float(last["atr_1m"]) if pd.notna(last.get("atr_1m")) else 0
+    vwap_price = float(last.get("vwap_1m", price))
 
     if atr_1m <= 0:
         return None
 
-    # Recent support/resistance from last 20 bars
     recent = df.tail(20)
     recent_low = float(recent["low"].min())
     recent_high = float(recent["high"].max())
 
+    # Volume Profile: last 100 bars
+    vp = compute_volume_profile(df, period=100, vol_pct=0.70)
+    vp_poc = vp.get("poc")
+    vp_vah = vp.get("vah")
+    vp_val = vp.get("val")
+
     pullback = atr_1m * ENTRY_ATR_PULLBACK
 
     if direction == "BUY":
-        # Limit buy below current price (at pullback level)
-        limit_price = price - pullback
-        # Don't place below recent support (too aggressive)
-        limit_price = max(limit_price, recent_low)
-        sl = limit_price - SL_ATR_MULT * atr_1m
-        tp = limit_price + TP_ATR_MULT * atr_1m
+        limit_price = max(price - pullback, recent_low)
+        sl = max(limit_price - SL_ATR_MULT * atr_1m, recent_low - atr_1m)
+        # Tiered TP:
+        tp1 = limit_price + 1.0 * atr_1m                          # immediate: +1R
+        tp3 = limit_price + TP_ATR_MULT * atr_1m                  # extended: +nR
+        if vp_vah is not None and vp_vah > limit_price + 0.5 * atr_1m:
+            tp2 = min(vp_vah, tp3)                                 # VP VAH target
+        elif vwap_price > limit_price + 0.5 * atr_1m:
+            tp2 = min(vwap_price, tp3)                             # VWAP target
+        else:
+            tp2 = limit_price + 1.5 * atr_1m                      # mid fallback
     else:  # SELL
-        # Limit sell above current price (at rally level)
-        limit_price = price + pullback
-        # Don't place above recent resistance
-        limit_price = min(limit_price, recent_high)
-        sl = limit_price + SL_ATR_MULT * atr_1m
-        tp = limit_price - TP_ATR_MULT * atr_1m
+        limit_price = min(price + pullback, recent_high)
+        sl = min(limit_price + SL_ATR_MULT * atr_1m, recent_high + atr_1m)
+        tp1 = limit_price - 1.0 * atr_1m
+        tp3 = limit_price - TP_ATR_MULT * atr_1m
+        if vp_val is not None and vp_val < limit_price - 0.5 * atr_1m:
+            tp2 = max(vp_val, tp3)                                 # VP VAL target
+        elif vwap_price < limit_price - 0.5 * atr_1m:
+            tp2 = max(vwap_price, tp3)                             # VWAP target
+        else:
+            tp2 = limit_price - 1.5 * atr_1m
 
-    rr_ratio = abs(tp - limit_price) / abs(sl - limit_price) if abs(sl - limit_price) > 0 else 0
+    # Stepped SL: after TP1 hit -> move SL to breakeven
+    sl2_breakeven = limit_price
+
+    risk = abs(limit_price - sl)
+    rr_tp2 = abs(tp2 - limit_price) / risk if risk > 0 else 0
+    rr_tp3 = abs(tp3 - limit_price) / risk if risk > 0 else 0
 
     return {
         "current_price": price,
         "limit_price": limit_price,
         "sl": sl,
-        "tp": tp,
+        "sl2_breakeven": sl2_breakeven,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
         "atr_1m": atr_1m,
-        "rr_ratio": rr_ratio,
+        "rr_tp2": rr_tp2,
+        "rr_tp3": rr_tp3,
+        "rr_ratio": rr_tp2,
         "recent_low": recent_low,
         "recent_high": recent_high,
         "distance_pct": abs(limit_price - price) / price * 100,
+        "vp_poc": vp_poc,
+        "vp_vah": vp_vah,
+        "vp_val": vp_val,
+        "vwap": vwap_price,
     }
+
+
+def _tp2_label(entry: dict, direction: str) -> str:
+    """Return a short label describing the TP2 source (VP VAH/VAL, VWAP, or fallback)."""
+    atr = entry.get("atr_1m", 1) or 1
+    tp2 = entry.get("tp2", 0)
+    vah = entry.get("vp_vah")
+    val = entry.get("vp_val")
+    vwap = entry.get("vwap")
+    if direction == "BUY" and vah is not None and abs(tp2 - vah) < atr * 0.5:
+        return "VP VAH"
+    if direction == "SELL" and val is not None and abs(tp2 - val) < atr * 0.5:
+        return "VP VAL"
+    if vwap is not None and abs(tp2 - vwap) < atr * 0.5:
+        return "VWAP"
+    return "+1.5xATR"
 
 
 def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict):
@@ -346,23 +414,35 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         if preset.get("primary")
     ]
 
-    # ── PART A: Independent Pattern Detection (once per TF) ──
-    # Use first combo's enabled just to compute indicators+patterns
+    # Pre-fetch OHLCV once per TF to stay within API rate limits (20 req/min)
+    _now = vn_now()
+    raw_data: dict = {}
+    for _tf in SIGNAL_TIMEFRAMES:
+        _days = 5 if _tf in ("1m", "5m") else 10
+        _start = (_now - timedelta(days=_days)).strftime("%Y-%m-%d")
+        _end   = _now.strftime("%Y-%m-%d")
+        try:
+            raw_data[_tf] = fetcher.get_futures_ohlcv(SYMBOL, _start, _end, interval=_tf)
+        except Exception as _e:
+            print(f"  [{_tf}] Fetch error: {_e}")
+            raw_data[_tf] = None
+
+    # PART A: Independent Pattern Detection (reuse cached data)
     pat_enabled = get_enabled_from_combo(active_combos[0])
     for tf in SIGNAL_TIMEFRAMES:
-        _, sig_df = scan_timeframe(fetcher, SYMBOL, tf, pat_enabled, active_combos[0])
+        _, sig_df = scan_timeframe(fetcher, SYMBOL, tf, pat_enabled, active_combos[0],
+                                   df=raw_data.get(tf))
         patterns = scan_patterns(fetcher, SYMBOL, tf, pat_enabled, active_combos[0], sig_df=sig_df)
         if patterns:
             for pat in patterns:
                 pat_key = f"PAT_{SYMBOL}_{pat['name']}_{pat['time']}"
                 if pat_key in sent_alerts:
                     continue
-                vol_str = "✓ Volume Confirm" if pat['vol_confirm'] else "✗ No Vol Confirm"
-                direction_emoji = "🟢" if pat['direction'] == 'BUY' else "🔴"
+                vol_str = "Vol OK" if pat['vol_confirm'] else "No Vol"
                 msg = (
-                    f"{'━' * 25}\n"
-                    f"<b>{direction_emoji} PATTERN: {pat['name']}</b>\n"
-                    f"{'━' * 25}\n"
+                    f"----------\n"
+                    f"<b>{pat['direction']} - {pat['name']}</b>\n"
+                    f"----------\n"
                     f"Symbol: <code>{SYMBOL}</code>\n"
                     f"Timeframe: <b>{pat['interval']}</b>\n"
                     f"Direction: <b>{pat['direction']}</b>\n"
@@ -374,17 +454,18 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                 notifier.send(msg)
                 sent_alerts[pat_key] = time.time()
                 print(f"  [{tf}] Pattern: {pat['name']} ({pat['direction']}) "
-                      f"vol={'✓' if pat['vol_confirm'] else '✗'}")
+                      f"vol={'OK' if pat['vol_confirm'] else 'no'}")
         else:
             print(f"  [{tf}] No pattern")
 
-    # ── PART B: ALL Combo Signals (each combo scanned independently) ──
+    # PART B: ALL Combo Signals (reuse cached data per TF)
     any_signal = False
     for combo_name in active_combos:
         combo_enabled = get_enabled_from_combo(combo_name)
         signals = []
         for tf in SIGNAL_TIMEFRAMES:
-            result, _ = scan_timeframe(fetcher, SYMBOL, tf, combo_enabled, combo_name)
+            result, _ = scan_timeframe(fetcher, SYMBOL, tf, combo_enabled, combo_name,
+                                       df=raw_data.get(tf))
             if result:
                 signals.append(result)
 
@@ -417,12 +498,12 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         if not entry:
             # Send without entry info
             msg = (
-                f"{'━' * 25}\n"
-                f"<b>{'🟢 BUY' if direction == 'BUY' else '🔴 SELL'} — Combo {combo_short}</b>\n"
-                f"{'━' * 25}\n"
+                f"----------\n"
+                f"<b>{'BUY' if direction == 'BUY' else 'SELL'} Combo {combo_short}</b>\n"
+                f"----------\n"
                 f"Symbol: <code>{SYMBOL}</code>\n"
                 f"Signal from: <b>{tfs_with_signal}</b>\n"
-                f"Confidence: {'⭐' * best_signal['confidence']} ({best_signal['confidence']}/3)\n"
+                f"Confidence: {best_signal['confidence']}/3\n"
                 f"Conditions: {', '.join(best_signal['conditions']) or 'Score-based'}\n"
                 f"Price: <code>{best_signal['price']:,.1f}</code>\n"
                 f"\n"
@@ -430,27 +511,32 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
             )
         else:
             msg = (
-                f"{'━' * 25}\n"
-                f"<b>{'🟢 BUY' if direction == 'BUY' else '🔴 SELL'} — Combo {combo_short}</b>\n"
-                f"{'━' * 25}\n"
+                f"----------\n"
+                f"<b>{'BUY' if direction == 'BUY' else 'SELL'} Combo {combo_short}</b>\n"
+                f"----------\n"
                 f"Symbol: <code>{SYMBOL}</code>\n"
                 f"Signal from: <b>{tfs_with_signal}</b>\n"
-                f"Confidence: {'⭐' * best_signal['confidence']} ({best_signal['confidence']}/3)\n"
+                f"Confidence: {best_signal['confidence']}/3\n"
                 f"Conditions: {', '.join(best_signal['conditions']) or 'Score-based'}\n"
                 f"\n"
-                f"<b>📋 LIMIT ORDER:</b>\n"
+                f"<b>LIMIT ORDER</b>\n"
                 f"  Entry: <code>{entry['limit_price']:,.1f}</code>\n"
                 f"  Current: <code>{entry['current_price']:,.1f}</code>\n"
                 f"  Distance: {entry['distance_pct']:.2f}%\n"
                 f"\n"
-                f"  SL: <code>{entry['sl']:,.1f}</code>\n"
-                f"  TP: <code>{entry['tp']:,.1f}</code>\n"
-                f"  R:R = <b>{entry['rr_ratio']:.1f}</b>\n"
+                f"  SL1:  <code>{entry['sl']:,.1f}</code>  (initial -{SL_ATR_MULT}xATR)\n"
+                f"  SL2:  <code>{entry['sl2_breakeven']:,.1f}</code>  (breakeven after TP1)\n"
                 f"\n"
-                f"<i>ATR(1m)={entry['atr_1m']:.1f} | "
-                f"RSI={best_signal['rsi']:.0f} | "
-                f"ADX={best_signal['adx']:.0f}</i>\n"
-                f"<i>Range: {entry['recent_low']:,.1f} - {entry['recent_high']:,.1f}</i>"
+                f"  TP1:  <code>{entry['tp1']:,.1f}</code>  (+1xATR) [then SL->BE]\n"
+                f"  TP2:  <code>{entry['tp2']:,.1f}</code>  ({_tp2_label(entry, direction)}) [main target]\n"
+                f"  TP3:  <code>{entry['tp3']:,.1f}</code>  (+{TP_ATR_MULT:.0f}xATR) [extended]\n"
+                f"\n"
+                f"  R:R (TP2) = <b>{entry['rr_tp2']:.1f}:1</b>  |  TP3 = {entry['rr_tp3']:.1f}:1\n"
+                f"\n"
+                f"<i>PoC={'N/A' if entry.get('vp_poc') is None else '{:,.1f}'.format(entry['vp_poc'])}"
+                f" | VWAP={entry['vwap']:,.1f} | ATR={entry['atr_1m']:.1f}</i>\n"
+                f"<i>RSI={best_signal['rsi']:.0f} | ADX={best_signal['adx']:.0f} | "
+                f"Range: {entry['recent_low']:,.1f}-{entry['recent_high']:,.1f}</i>"
             )
 
         notifier.send(msg)
@@ -504,10 +590,10 @@ def main():
     notifier.send(
         f"<b>Scanner Started</b>\n"
         f"Symbol: <code>{SYMBOL}</code>\n"
-        f"Signal: {', '.join(SIGNAL_TIMEFRAMES)} → Entry: {ENTRY_TIMEFRAME}\n"
+        f"Signal: {', '.join(SIGNAL_TIMEFRAMES)} - Entry: {ENTRY_TIMEFRAME}\n"
         f"Combos: {combo_labels} + Patterns\n"
         f"Interval: {SCAN_INTERVAL}s\n"
-        f"Limit: {ENTRY_ATR_PULLBACK}×ATR pullback | R:R {TP_ATR_MULT/SL_ATR_MULT:.0f}:1"
+        f"Limit: {ENTRY_ATR_PULLBACK}xATR pullback | R:R {TP_ATR_MULT/SL_ATR_MULT:.0f}:1"
     )
 
     while True:

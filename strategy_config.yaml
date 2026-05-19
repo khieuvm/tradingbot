@@ -23,7 +23,7 @@ market_open: "09:00"
 market_close: "14:30"
 
 # ─── ACTIVE COMBO PRESET ─────────────────────────────────────────
-# Choose one: A, B, C, D, K, or Custom
+# Choose one: A, B, C, D, E, F, G, H, J, K, L, or Custom
 active_combo: "D: Trend Confirmation (safest)"
 
 # ─── ENTRY / RISK MANAGEMENT ─────────────────────────────────────
@@ -54,6 +54,15 @@ indicators:
   macd_slow: 26             # MACD slow EMA
   macd_signal: 9            # MACD signal line
   vol_mult: 1.5             # Volume spike multiplier (vs 20-bar avg)
+  # New indicators
+  ichimoku_tenkan: 9        # Ichimoku Tenkan-sen period
+  ichimoku_kijun: 26        # Ichimoku Kijun-sen period
+  ichimoku_senkou: 52       # Ichimoku Senkou Span B period
+  supertrend_period: 7      # Supertrend ATR period
+  supertrend_mult: 3.0      # Supertrend ATR multiplier
+  cci_period: 14            # CCI period
+  williams_r_period: 14     # Williams %R period
+  donchian_period: 20       # Donchian channel period
 
 # ═══════════════════════════════════════════════════════════════════
 # COMBO PRESETS - Signal generation logic
@@ -141,3 +150,70 @@ combos:
     gate:
       - macd_filter
       - vol_color_filter
+
+  E_Ichimoku_Trend:
+    name: "E: Ichimoku Trend (Asia)"
+    desc: "Tenkan/Kijun cross + price above/below cloud. Very effective in Asian trending markets."
+    primary:
+      - ichimoku_cross
+    confirm:
+      - supertrend_flip
+      - adx_di
+      - macd_hist_rev
+
+  F_Supertrend_Momentum:
+    name: "F: Supertrend Momentum"
+    desc: "Supertrend direction flip + ADX strong trend confirmation. Clean trend-following."
+    primary:
+      - supertrend_flip
+    confirm:
+      - adx_di
+      - ema_ribbon
+      - macd_cross
+
+  G_MultiOscillator_Reversal:
+    name: "G: Multi-Oscillator Reversal"
+    desc: "CCI + Williams %R both in extreme zones -> mean reversion signal."
+    primary:
+      - cci_extreme
+      - williams_extreme
+    confirm:
+      - stoch_cross
+      - bb_bounce
+      - rsi_div
+
+  H_VWAP_Donchian_Breakout:
+    name: "H: VWAP + Donchian Breakout"
+    desc: "Donchian channel breakout + VWAP deviation confirms direction. Intraday breakout."
+    primary:
+      - donchian_break
+    confirm:
+      - vwap_dev
+      - adx_di
+      - macd_hist_rev
+    gate:
+      - macd_filter
+
+  J_PSAR_Ichimoku_Flip:
+    name: "J: PSAR + Ichimoku Flip"
+    desc: "Parabolic SAR flips direction + Ichimoku cloud confirms. High precision entries."
+    primary:
+      - psar_flip
+      - ichimoku_cross
+    confirm:
+      - supertrend_flip
+      - adx_di
+      - ema_ribbon
+
+  L_PVT_Volume_Confirm:
+    name: "L: PVT Volume Confirm"
+    desc: "EMA Ribbon trend + MACD momentum, gated by PVT direction."
+    primary:
+      - ema_ribbon
+      - macd_cross
+    confirm:
+      - adx_di
+      - supertrend_flip
+      - macd_hist_rev
+    gate:
+      - pvt_confirm

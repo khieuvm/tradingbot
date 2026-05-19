@@ -222,6 +222,71 @@ def calculate_dynamic_sr(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ===================== VOLUME PROFILE CALCULATOR =====================
+def compute_volume_profile(df: pd.DataFrame, period: int = 100, vol_pct: float = 0.70) -> dict:
+    """Compute Volume Profile (PoC / VAH / VAL) from last N OHLCV candles.
+
+    Expand from PoC in both directions, adding the higher-volume side first,
+    until vol_pct% of total volume is captured.
+
+    Returns:
+        dict with keys 'poc', 'vah', 'val' (all float or None on failure)
+    """
+    subset = df.tail(period).copy()
+    if len(subset) < 10:
+        return {"poc": None, "vah": None, "val": None}
+
+    price_range = float(subset["high"].max() - subset["low"].min())
+    if price_range <= 0:
+        return {"poc": None, "vah": None, "val": None}
+
+    # Adaptive bucket step: aim for ~20 price buckets
+    step = max(1.0, round(price_range / 20, 0))
+
+    # Typical price (H+L+C)/3 as representative price for each bar
+    typical = (subset["high"] + subset["low"] + subset["close"]) / 3
+    subset = subset.assign(bucket=(typical / step).round(0) * step)
+    vp = subset.groupby("bucket")["volume"].sum().reset_index()
+    vp.columns = ["price", "volume"]
+    vp = vp.sort_values("price").reset_index(drop=True)
+
+    if len(vp) == 0:
+        return {"poc": None, "vah": None, "val": None}
+
+    # PoC = price level with highest volume
+    poc_idx = int(vp["volume"].idxmax())
+    poc = float(vp.loc[poc_idx, "price"])
+    total_vol = float(vp["volume"].sum())
+    threshold = total_vol * vol_pct
+
+    # Expand from PoC outward; pick the higher-volume side at each step
+    above = vp[vp["price"] > poc].sort_values("price").reset_index(drop=True)
+    below = vp[vp["price"] < poc].sort_values("price", ascending=False).reset_index(drop=True)
+
+    cum_vol = float(vp.loc[poc_idx, "volume"])
+    vah = poc
+    val = poc
+    ia, ib = 0, 0
+
+    while cum_vol < threshold and (ia < len(above) or ib < len(below)):
+        a_vol = float(above.loc[ia, "volume"]) if ia < len(above) else 0.0
+        b_vol = float(below.loc[ib, "volume"]) if ib < len(below) else 0.0
+
+        if a_vol == 0.0 and b_vol == 0.0:
+            break
+
+        if a_vol >= b_vol:
+            vah = float(above.loc[ia, "price"])
+            cum_vol += a_vol
+            ia += 1
+        else:
+            val = float(below.loc[ib, "price"])
+            cum_vol += b_vol
+            ib += 1
+
+    return {"poc": poc, "vah": float(vah), "val": float(val)}
+
+
 # ===================== COMBO PRESETS =====================
 # Each preset defines:
 #   primary: conditions that trigger entry (need >= 1 to fire)
@@ -256,6 +321,38 @@ COMBO_PRESETS = {
         "confirm": ["rsi_div", "hammer_star", "engulfing"],
         "gate": ["macd_filter", "vol_color_filter"],
     },
+    "E: Ichimoku Trend (Asia)": {
+        "desc": "Tenkan/Kijun cross + price above/below cloud. Very effective in Asian trending markets.",
+        "primary": ["ichimoku_cross"],
+        "confirm": ["supertrend_flip", "adx_di", "macd_hist_rev"],
+    },
+    "F: Supertrend Momentum": {
+        "desc": "Supertrend direction flip + ADX strong trend confirmation. Clean trend-following.",
+        "primary": ["supertrend_flip"],
+        "confirm": ["adx_di", "ema_ribbon", "macd_cross"],
+    },
+    "G: Multi-Oscillator Reversal": {
+        "desc": "CCI + Williams %R both in extreme zone -> mean reversion. Strong oversold/overbought.",
+        "primary": ["cci_extreme", "williams_extreme"],
+        "confirm": ["stoch_cross", "bb_bounce", "rsi_div"],
+    },
+    "H: VWAP + Donchian Breakout": {
+        "desc": "Price breaks Donchian channel + VWAP deviation confirms direction. Intraday breakout.",
+        "primary": ["donchian_break"],
+        "confirm": ["vwap_dev", "adx_di", "macd_hist_rev"],
+        "gate": ["macd_filter"],
+    },
+    "J: PSAR + Ichimoku Flip": {
+        "desc": "Parabolic SAR flips direction confirmed by Ichimoku cloud position. High precision entries.",
+        "primary": ["psar_flip", "ichimoku_cross"],
+        "confirm": ["supertrend_flip", "adx_di", "ema_ribbon"],
+    },
+    "L: PVT Volume Confirm": {
+        "desc": "EMA Ribbon trend + MACD momentum, gated by PVT direction (volume must confirm price move).",
+        "primary": ["ema_ribbon", "macd_cross"],
+        "confirm": ["adx_di", "supertrend_flip", "macd_hist_rev"],
+        "gate": ["pvt_confirm"],
+    },
 }
 
 # Condition labels for display
@@ -267,8 +364,14 @@ COND_LABELS = {
     "engulfing": "Engulfing",
     "ema_ribbon": "EMA Ribbon", "inside_bar": "Inside Bar",
     "hammer_star": "Hammer/Star", "adx_di": "ADX+DI",
-    "sr_breakout": "S/R Breakout", "sr_atr": "S/R ± ATR",
+    "sr_breakout": "S/R Breakout", "sr_atr": "S/R +/- ATR",
     "macd_filter": "MACD Filter", "vol_color_filter": "Vol Color Filter",
+    # New indicators
+    "ichimoku_cross": "Ichimoku Cross", "supertrend_flip": "Supertrend Flip",
+    "vwap_dev": "VWAP Deviation", "donchian_break": "Donchian Break",
+    "cci_extreme": "CCI Extreme", "psar_flip": "PSAR Flip",
+    "williams_extreme": "Williams %R",
+    "pvt_confirm": "PVT Confirm",
 }
 
 # All condition keys
@@ -277,6 +380,10 @@ ALL_COND_KEYS = [
     "macd_hist_rev", "stoch_cross", "bb_bounce", "engulfing",
     "ema_ribbon", "inside_bar", "hammer_star", "adx_di", "sr_breakout",
     "sr_atr", "macd_filter", "vol_color_filter",
+    # New
+    "ichimoku_cross", "supertrend_flip", "vwap_dev", "donchian_break",
+    "cci_extreme", "psar_flip", "williams_extreme",
+    "pvt_confirm",
 ]
 
 
@@ -488,6 +595,103 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df["adx"] = 0
         df["plus_di"] = 0
         df["minus_di"] = 0
+
+    # --- Ichimoku Cloud (Tenkan 9 / Kijun 26 / Senkou 52) ---
+    try:
+        ichi = ta.ichimoku(df["high"], df["low"], df["close"], tenkan=9, kijun=26, senkou=52)
+        if ichi is not None and len(ichi) == 2:
+            ichi_df = ichi[0]
+            cols = ichi_df.columns.tolist()
+            tenkan_col = next((c for c in cols if c.startswith("ITS")), None)
+            kijun_col  = next((c for c in cols if c.startswith("IKS")), None)
+            span_a_col = next((c for c in cols if c.startswith("ISA")), None)
+            span_b_col = next((c for c in cols if c.startswith("ISB")), None)
+            df["ichi_tenkan"] = ichi_df[tenkan_col] if tenkan_col else np.nan
+            df["ichi_kijun"]  = ichi_df[kijun_col]  if kijun_col  else np.nan
+            df["ichi_span_a"] = ichi_df[span_a_col] if span_a_col else np.nan
+            df["ichi_span_b"] = ichi_df[span_b_col] if span_b_col else np.nan
+        else:
+            df["ichi_tenkan"] = df["ichi_kijun"] = df["ichi_span_a"] = df["ichi_span_b"] = np.nan
+    except Exception:
+        df["ichi_tenkan"] = df["ichi_kijun"] = df["ichi_span_a"] = df["ichi_span_b"] = np.nan
+
+    # --- Supertrend (length=7, multiplier=3.0) ---
+    try:
+        st = ta.supertrend(df["high"], df["low"], df["close"], length=7, multiplier=3.0)
+        if st is not None:
+            st_dir_col = next((c for c in st.columns if "SUPERTd" in c), None)
+            df["supertrend_dir"] = st[st_dir_col].fillna(0) if st_dir_col else 0
+        else:
+            df["supertrend_dir"] = 0
+    except Exception:
+        df["supertrend_dir"] = 0
+
+    # --- VWAP (requires DatetimeIndex) ---
+    try:
+        _df_vwap = df.copy()
+        if "time" in _df_vwap.columns and not isinstance(_df_vwap.index, pd.DatetimeIndex):
+            _df_vwap.index = pd.to_datetime(_df_vwap["time"])
+        vwap_result = ta.vwap(_df_vwap["high"], _df_vwap["low"], _df_vwap["close"], _df_vwap["volume"].astype(float))
+        df["vwap"] = vwap_result.values if vwap_result is not None else df["close"].values
+    except Exception:
+        df["vwap"] = df["close"]
+    df["vwap_dist"] = (df["close"] - df["vwap"]) / df["atr"].replace(0, np.nan)
+
+    # --- Donchian Channels (shifted 1 bar to avoid look-ahead) ---
+    try:
+        dc = ta.donchian(df["high"], df["low"], lower_length=20, upper_length=20)
+        if dc is not None:
+            dcu = next((c for c in dc.columns if "DCU" in c), None)
+            dcl = next((c for c in dc.columns if "DCL" in c), None)
+            df["dc_upper"] = dc[dcu].shift(1) if dcu else df["resistance_20"]
+            df["dc_lower"] = dc[dcl].shift(1) if dcl else df["support_20"]
+        else:
+            df["dc_upper"] = df["resistance_20"]
+            df["dc_lower"] = df["support_20"]
+    except Exception:
+        df["dc_upper"] = df["resistance_20"]
+        df["dc_lower"] = df["support_20"]
+
+    # --- CCI (Commodity Channel Index, 14-period) ---
+    try:
+        cci_result = ta.cci(df["high"], df["low"], df["close"], length=14)
+        df["cci"] = cci_result if cci_result is not None else 0
+    except Exception:
+        df["cci"] = 0
+
+    # --- Parabolic SAR ---
+    try:
+        psar = ta.psar(df["high"], df["low"], df["close"])
+        if psar is not None:
+            psar_l = next((c for c in psar.columns if "PSARl" in c), None)
+            # PSARl has values (not NaN) only during bullish phase
+            df["psar_bull"] = psar[psar_l].notna() if psar_l else True
+        else:
+            df["psar_bull"] = True
+    except Exception:
+        df["psar_bull"] = True
+    df["psar_bull_prev"] = df["psar_bull"].shift(1).fillna(True)
+
+    # --- Williams %R (14-period) ---
+    try:
+        willr_result = ta.willr(df["high"], df["low"], df["close"], length=14)
+        df["willr"] = willr_result if willr_result is not None else -50
+    except Exception:
+        df["willr"] = -50
+
+    # --- PVT (Price Volume Trend) ---
+    # Rising PVT => volume confirms bullish price move
+    # Falling PVT => volume confirms bearish price move
+    try:
+        _pvt_chg = df["volume"].astype(float) * (
+            (df["close"] - df["close"].shift(1)) /
+            df["close"].shift(1).replace(0, np.nan)
+        )
+        df["pvt"] = _pvt_chg.fillna(0).cumsum()
+        df["pvt_bull"] = df["pvt"] > df["pvt"].shift(3)  # rising over 3 bars
+    except Exception:
+        df["pvt"] = 0.0
+        df["pvt_bull"] = True
 
     # ==================== SCORE SYSTEM ====================
     df["buy_score"] = 0
@@ -775,13 +979,111 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[sell_ok, "_s_macd_filter"] = 1
 
     # --- 17. Volume Color Filter (GATE) ---
-    # Logic: Không BUY khi nến đỏ (close < open) → selling pressure
-    #        Không SELL khi nến xanh (close >= open) → buying pressure
+    # No BUY on red candle (close < open) = selling pressure
+    # No SELL on green candle (close >= open) = buying pressure
     if enabled.get("vol_color_filter", False):
         green_candle = df["close"] >= df["open"]
         red_candle = df["close"] < df["open"]
         df.loc[green_candle, "_b_vol_color_filter"] = 1
         df.loc[red_candle, "_s_vol_color_filter"] = 1
+
+    # --- 18. Ichimoku Cloud Cross (TK Cross + Cloud Position) ---
+    # BUY: Tenkan crosses above Kijun AND price is above the cloud
+    # SELL: Tenkan crosses below Kijun AND price is below the cloud
+    if enabled.get("ichimoku_cross", False):
+        tk_cross_up = (
+            (df["ichi_tenkan"] > df["ichi_kijun"]) &
+            (df["ichi_tenkan"].shift(1) <= df["ichi_kijun"].shift(1))
+        )
+        tk_cross_down = (
+            (df["ichi_tenkan"] < df["ichi_kijun"]) &
+            (df["ichi_tenkan"].shift(1) >= df["ichi_kijun"].shift(1))
+        )
+        cloud_top = df[["ichi_span_a", "ichi_span_b"]].max(axis=1)
+        cloud_bot = df[["ichi_span_a", "ichi_span_b"]].min(axis=1)
+        _buy  = tk_cross_up   & (df["close"] > cloud_top)
+        _sell = tk_cross_down & (df["close"] < cloud_bot)
+        df.loc[_buy,  "buy_score"]  += 1
+        df.loc[_sell, "sell_score"] += 1
+        df.loc[_buy,  "_b_ichimoku_cross"] = 1
+        df.loc[_sell, "_s_ichimoku_cross"] = 1
+
+    # --- 19. Supertrend Direction Flip ---
+    # BUY: Supertrend flips from -1 (bearish) to +1 (bullish)
+    # SELL: Supertrend flips from +1 to -1
+    if enabled.get("supertrend_flip", False):
+        st_flip_bull = (df["supertrend_dir"] == 1)  & (df["supertrend_dir"].shift(1) == -1)
+        st_flip_bear = (df["supertrend_dir"] == -1) & (df["supertrend_dir"].shift(1) == 1)
+        df.loc[st_flip_bull, "buy_score"]  += 1
+        df.loc[st_flip_bear, "sell_score"] += 1
+        df.loc[st_flip_bull, "_b_supertrend_flip"] = 1
+        df.loc[st_flip_bear, "_s_supertrend_flip"] = 1
+
+    # --- 20. VWAP Deviation Mean Reversion ---
+    # BUY: Price >2 ATR below VWAP and starting to return
+    # SELL: Price >2 ATR above VWAP and starting to return
+    if enabled.get("vwap_dev", False):
+        _buy  = (df["vwap_dist"] < -2.0) & (df["close"] > df["close"].shift(1))
+        _sell = (df["vwap_dist"] >  2.0) & (df["close"] < df["close"].shift(1))
+        df.loc[_buy,  "buy_score"]  += 1
+        df.loc[_sell, "sell_score"] += 1
+        df.loc[_buy,  "_b_vwap_dev"] = 1
+        df.loc[_sell, "_s_vwap_dev"] = 1
+
+    # --- 21. Donchian Channel Breakout ---
+    # BUY: close breaks above 20-period upper channel (fresh breakout)
+    # SELL: close breaks below 20-period lower channel
+    if enabled.get("donchian_break", False):
+        _buy  = (df["close"] > df["dc_upper"]) & (df["close"].shift(1) <= df["dc_upper"].shift(1))
+        _sell = (df["close"] < df["dc_lower"]) & (df["close"].shift(1) >= df["dc_lower"].shift(1))
+        df.loc[_buy,  "buy_score"]  += 1
+        df.loc[_sell, "sell_score"] += 1
+        df.loc[_buy,  "_b_donchian_break"] = 1
+        df.loc[_sell, "_s_donchian_break"] = 1
+
+    # --- 22. CCI Extreme Zone Exit ---
+    # BUY: CCI crosses from below -100 back above -100 (exits oversold)
+    # SELL: CCI crosses from above +100 back below +100 (exits overbought)
+    if enabled.get("cci_extreme", False):
+        _buy  = (df["cci"] > -100) & (df["cci"].shift(1) <= -100)
+        _sell = (df["cci"] <  100) & (df["cci"].shift(1) >=  100)
+        df.loc[_buy,  "buy_score"]  += 1
+        df.loc[_sell, "sell_score"] += 1
+        df.loc[_buy,  "_b_cci_extreme"] = 1
+        df.loc[_sell, "_s_cci_extreme"] = 1
+
+    # --- 23. Parabolic SAR Flip ---
+    # BUY: PSAR flips from bearish (dots above) to bullish (dots below price)
+    # SELL: PSAR flips from bullish to bearish
+    if enabled.get("psar_flip", False):
+        _buy  = df["psar_bull"] & ~df["psar_bull_prev"]
+        _sell = ~df["psar_bull"] & df["psar_bull_prev"]
+        df.loc[_buy,  "buy_score"]  += 1
+        df.loc[_sell, "sell_score"] += 1
+        df.loc[_buy,  "_b_psar_flip"] = 1
+        df.loc[_sell, "_s_psar_flip"] = 1
+
+    # --- 24. Williams %R Extreme Zone Exit ---
+    # BUY: Williams %R crosses from oversold (<-80) back above -80
+    # SELL: Williams %R crosses from overbought (>-20) back below -20
+    if enabled.get("williams_extreme", False):
+        _buy  = (df["willr"] > -80) & (df["willr"].shift(1) <= -80)
+        _sell = (df["willr"] < -20) & (df["willr"].shift(1) >= -20)
+        df.loc[_buy,  "buy_score"]  += 1
+        df.loc[_sell, "sell_score"] += 1
+        df.loc[_buy,  "_b_williams_extreme"] = 1
+        df.loc[_sell, "_s_williams_extreme"] = 1
+
+    # --- 25. PVT (Price Volume Trend) Confirmation ---
+    # BUY only when PVT is rising (volume confirms bullish price move)
+    # SELL only when PVT is falling (volume confirms bearish price move)
+    if enabled.get("pvt_confirm", False):
+        _buy  = df["pvt_bull"].fillna(True)
+        _sell = ~df["pvt_bull"].fillna(True)
+        df.loc[_buy,  "buy_score"]  += 1
+        df.loc[_sell, "sell_score"] += 1
+        df.loc[_buy,  "_b_pvt_confirm"] = 1
+        df.loc[_sell, "_s_pvt_confirm"] = 1
 
     # ==================== PATTERN DETECTION (informational) ====================
     # Improved implementation based on TA-Lib logic and swing-point analysis.
