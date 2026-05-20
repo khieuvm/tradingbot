@@ -18,6 +18,7 @@ Usage:
 import sys
 import time
 import traceback
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -30,6 +31,10 @@ if hasattr(sys.stderr, "reconfigure"):
 import pandas as pd
 import yaml
 
+# Suppress noisy third-party warnings from pandas_ta / pandas internals
+warnings.filterwarnings("ignore", message="DataFrame is highly fragmented", category=pd.errors.PerformanceWarning)
+warnings.filterwarnings("ignore", message="Downcasting object dtype arrays", category=FutureWarning)
+
 from config import Config
 from src.data_fetcher import DataFetcher
 from src.signals import (
@@ -38,6 +43,9 @@ from src.signals import (
     compute_volume_profile,
 )
 from src.notifier import TelegramNotifier
+from src.portfolio_manager import PortfolioManager
+from src.position_manager import PositionManager
+from src.trade_logger import TradeLogger
 
 # --- LOAD CONFIG FROM YAML ----------------------------------------
 CONFIG_PATH = Path(__file__).parent / "strategy_config.yaml"
@@ -117,6 +125,7 @@ MARKET_CLOSE = (14, 30)
 ENTRY_ATR_PULLBACK = 0.5
 SL_ATR_MULT = 1.5
 TP_ATR_MULT = 3.0
+MIN_COMBOS_ENTRY = 2       # Minimum combos agreeing to simulate a trade entry
 PARAMS = {
     "fast_ma": 10, "slow_ma": 20, "rsi_period": 7,
     "oversold": 35, "overbought": 70,
@@ -124,15 +133,16 @@ PARAMS = {
     "vol_mult": 1.5,
 }
 
-# Combo -> Timeframe effectiveness map (based on 100-day backtest analysis)
-# Only run combos on TFs where avg PnL > 0 and meaningful edge exists
+# Combo -> Timeframe effectiveness map (44-day portfolio test, updated May 21 2026)
+# Result: 66 trades, WR 49%, Net +15.1M, MaxDD -3.4M, Sharpe 4.14
 COMBO_TF_MAP = {
-    "A": ["1m", "5m"],       # 1m: +22.5 avg | 5m: +51.7 avg | 15m: -33.0 avg (SKIP)
-    "B": ["15m"],            # 1m: -1.7 avg | 5m: -39.5 avg (SKIP) | 15m: +3.5 avg
-    "C": ["1m", "5m", "15m"],  # All TFs profitable
-    "K": ["15m"],            # 1m: +0.6 (noise) | 5m: -0.2 (SKIP) | 15m: +15.4 avg
-    "F": ["5m"],             # 1m: +1.3 (noise) | 5m: +5.9 avg, best +47.1 | 15m: +0.6 (noise)
-    "G": ["1m", "5m", "15m"],  # All TFs excellent (+48, +46, +34 avg)
+    "G": ["5m", "15m"],      # Main driver: +13.7M, PF 1.55
+    "F": ["15m"],            # +1.1M in portfolio context
+    "M": ["5m"],             # +1.4M, 60% WR
+    "K": ["15m"],            # +1.8M, very selective
+    "G+": ["5m", "15m"],     # +6.8M standalone, PF 2.20-2.46
+    # DISABLED: F+(PF 0.98, -1.1M portfolio), L(reversal conflicts),
+    #           H(too noisy), I(negative), B(negative), C(low PF)
 }
 
 # Load from YAML if exists
@@ -429,8 +439,10 @@ def _tp2_label(entry: dict, direction: str) -> str:
     return "+1.5xATR"
 
 
-def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict):
-    """Run one scan cycle: ALL combos x ALL timeframes independently."""
+def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict,
+             position_manager: PositionManager | None = None,
+             portfolio_mgr: PortfolioManager | None = None):
+    """Run one scan cycle: ALL combos x ALL timeframes, then consolidated alert per direction."""
     print(f"\n[{vn_now().strftime('%H:%M:%S')}] Scanning {SYMBOL}...")
 
     # All combos that have primary conditions defined
@@ -438,6 +450,29 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         name for name, preset in COMBO_PRESETS.items()
         if preset.get("primary")
     ]
+
+    # --- Portfolio price update (check SL/TP for open positions) ---
+    if portfolio_mgr and portfolio_mgr.n_open > 0:
+        try:
+            _now_pm = vn_now()
+            _start_pm = (_now_pm - timedelta(days=1)).strftime("%Y-%m-%d")
+            _end_pm = _now_pm.strftime("%Y-%m-%d")
+            _df_pm = fetcher.get_futures_ohlcv(SYMBOL, _start_pm, _end_pm, interval="1m")
+            if _df_pm is not None and len(_df_pm) > 1:
+                _last = _df_pm.iloc[-1]
+                _atr = float((_df_pm["high"] - _df_pm["low"]).rolling(14).mean().iloc[-1])
+                portfolio_mgr.update_prices(
+                    SYMBOL,
+                    high=float(_last["high"]),
+                    low=float(_last["low"]),
+                    close=float(_last["close"]),
+                    atr=_atr,
+                )
+            portfolio_mgr.tick()  # decrease cooldown
+        except Exception as _e:
+            print(f"  [PORTFOLIO UPDATE ERROR] {_e}")
+    elif portfolio_mgr:
+        portfolio_mgr.tick()
 
     # Pre-fetch OHLCV once per TF to stay within API rate limits
     _now = vn_now()
@@ -452,8 +487,9 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
             print(f"  [{_tf}] Fetch error: {_e}")
             raw_data[_tf] = None
 
-    # Scan each combo across its allowed TFs only
-    any_signal = False
+    # --- Pass 1: Scan ALL combos, collect results (no alert yet) ---
+    collected: list[dict] = []
+
     for combo_name in active_combos:
         combo_enabled = get_enabled_from_combo(combo_name)
         combo_short = combo_name.split(":")[0].strip()
@@ -464,9 +500,7 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         # Collect signals per TF
         tf_signals = {}
         for tf in SIGNAL_TIMEFRAMES:
-            if tf not in allowed_tfs:
-                continue
-            if raw_data.get(tf) is None:
+            if tf not in allowed_tfs or raw_data.get(tf) is None:
                 continue
             result, _ = scan_timeframe(fetcher, SYMBOL, tf, combo_enabled, combo_name,
                                        df=raw_data.get(tf))
@@ -476,144 +510,182 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         if not tf_signals:
             continue
 
-        # Check direction agreement
-        buy_tfs = [tf for tf, s in tf_signals.items() if s["signal"] == "BUY"]
+        buy_tfs  = [tf for tf, s in tf_signals.items() if s["signal"] == "BUY"]
         sell_tfs = [tf for tf, s in tf_signals.items() if s["signal"] == "SELL"]
 
-        # Determine dominant direction
         if len(buy_tfs) >= len(sell_tfs) and buy_tfs:
-            direction = "BUY"
-            aligned_tfs = buy_tfs
+            direction, aligned_tfs = "BUY", buy_tfs
         elif sell_tfs:
-            direction = "SELL"
-            aligned_tfs = sell_tfs
+            direction, aligned_tfs = "SELL", sell_tfs
         else:
             continue
 
-        # Strength based on TF agreement (relative to max possible for this combo)
-        n_agree = len(aligned_tfs)
-        max_tfs = len(allowed_tfs)
-        if n_agree >= 3 or (n_agree == max_tfs and max_tfs >= 2):
-            strength = "SUPER STRONG"
-            strength_emoji = f"{n_agree}TF"
-        elif n_agree == 2:
-            strength = "STRONG"
-            strength_emoji = "2TF"
-        else:
-            strength = "NORMAL"
-            strength_emoji = "1TF"
+        n_agree  = len(aligned_tfs)
+        max_tfs  = len(allowed_tfs)
+        best_tf  = max(aligned_tfs, key=lambda tf: tf_signals[tf]["confidence"])
+        best_sig = tf_signals[best_tf]
 
-        # Best signal (highest confidence from aligned TFs)
-        best_tf = max(aligned_tfs, key=lambda tf: tf_signals[tf]["confidence"])
-        best_signal = tf_signals[best_tf]
-        tfs_str = ", ".join(aligned_tfs)
+        all_conds: set[str] = set()
+        for tf in aligned_tfs:
+            all_conds.update(tf_signals[tf]["conditions"])
 
-        # Dedup: unique per combo + direction + signal bar time (use highest TF time)
-        highest_tf = aligned_tfs[-1]  # 15m > 5m > 1m
-        alert_key = f"{SYMBOL}_{combo_short}_{direction}_{tf_signals[highest_tf]['time']}"
-        if alert_key in sent_alerts:
+        highest_tf = aligned_tfs[-1]
+        alert_key  = f"{SYMBOL}_{combo_short}_{direction}_{tf_signals[highest_tf]['time']}"
+
+        collected.append({
+            "direction":   direction,
+            "combo_name":  combo_name,
+            "combo_short": combo_short,
+            "aligned_tfs": aligned_tfs,
+            "n_agree":     n_agree,
+            "max_tfs":     max_tfs,
+            "best_sig":    best_sig,
+            "all_conds":   all_conds,
+            "alert_key":   alert_key,
+        })
+
+    # --- Pass 2: Group by direction, send ONE consolidated alert per direction ---
+    buy_items  = [c for c in collected if c["direction"] == "BUY"]
+    sell_items = [c for c in collected if c["direction"] == "SELL"]
+
+    any_signal = False
+    for direction, items in [("BUY", buy_items), ("SELL", sell_items)]:
+        if not items:
+            continue
+
+        # Only send if at least one combo-key is new (dedup)
+        new_items = [i for i in items if i["alert_key"] not in sent_alerts]
+        if not new_items:
             continue
 
         any_signal = True
-        print(f"  [{strength}] Combo {combo_short}: {direction} on {tfs_str} "
-              f"(conf={best_signal['confidence']})")
 
-        # Collect all fired conditions across TFs
-        all_conditions = set()
-        for tf in aligned_tfs:
-            all_conditions.update(tf_signals[tf]["conditions"])
+        # --- Overall strength score ---
+        # Score per combo = n_agree * confidence (max 3*3=9)
+        total_score  = sum(i["n_agree"] * i["best_sig"]["confidence"] for i in items)
+        max_agree    = max(i["n_agree"] for i in items)
+        n_combos     = len(items)
+        n_all_combos = len(active_combos)
 
-        # Get entry with R:R
+        if max_agree >= 3 or (max_agree == 2 and n_combos >= 2):
+            overall_strength = "SUPER STRONG"
+            dir_icon = "\U0001f7e2\U0001f7e2\U0001f7e2" if direction == "BUY" else "\U0001f534\U0001f534\U0001f534"
+        elif max_agree == 2 or n_combos >= 2:
+            overall_strength = "STRONG"
+            dir_icon = "\U0001f7e2\U0001f7e2" if direction == "BUY" else "\U0001f534\U0001f534"
+        else:
+            overall_strength = "NORMAL"
+            dir_icon = "\U0001f7e2" if direction == "BUY" else "\U0001f534"
+
+        # --- Per-combo summary lines ---
+        combo_lines = []
+        for i in sorted(items, key=lambda x: x["n_agree"] * x["best_sig"]["confidence"], reverse=True):
+            stars = "\u2605" * i["best_sig"]["confidence"] + "\u2606" * (3 - i["best_sig"]["confidence"])
+            tfs_str = ",".join(i["aligned_tfs"])
+            combo_lines.append(
+                f"  <b>{i['combo_short']}</b>: {i['n_agree']}/{i['max_tfs']} TF [{tfs_str}] {stars}"
+            )
+
+        # Best combo overall (highest score) — used for conditions display & position
+        best_item = max(items, key=lambda x: x["n_agree"] * x["best_sig"]["confidence"])
+        ref_sig   = best_item["best_sig"]
+        all_conds_merged: set[str] = set()
+        for i in items:
+            all_conds_merged.update(i["all_conds"])
+
+        print(f"  [{overall_strength}] {direction}: {n_combos} combos "
+              f"(score={total_score}) -> ALERT")
+
+        # --- Entry / risk info ---
         entry = get_1m_entry(fetcher, SYMBOL, direction)
 
-        # Build reasoning
-        preset = COMBO_PRESETS.get(combo_name, {})
-        primary_names = [COND_LABELS.get(c, c) for c in preset.get("primary", [])]
-        gate_names = [COND_LABELS.get(c, c) for c in preset.get("gate", [])]
-
-        reason_lines = []
-        reason_lines.append(f"Primary: {', '.join(primary_names)}")
-        if gate_names:
-            reason_lines.append(f"Gates passed: {', '.join(gate_names)}")
-        reason_lines.append(f"Fired: {', '.join(all_conditions) if all_conditions else 'Score-based'}")
-
-        # Risk info
         if entry and entry.get("atr_1m", 0) > 0:
-            risk_pts = abs(entry["limit_price"] - entry["sl"])
-            reward_pts = abs(entry["tp2"] - entry["limit_price"])
-            rr_str = f"{entry['rr_tp2']:.1f}:1"
-            risk_vnd = risk_pts * 100_000  # 1 point = 100k VND
-            reward_vnd = reward_pts * 100_000
-        else:
-            risk_pts = best_signal["atr"] * SL_ATR_MULT
-            reward_pts = best_signal["atr"] * TP_ATR_MULT
-            rr_str = f"{TP_ATR_MULT/SL_ATR_MULT:.1f}:1"
-            risk_vnd = risk_pts * 100_000
-            reward_vnd = reward_pts * 100_000
-
-        # Build notification message
-        if entry:
-            tp2_src = _tp2_label(entry, direction)
-            msg = (
-                f"{'='*20}\n"
-                f"<b>[{strength_emoji}] {direction} - Combo {combo_short}</b>\n"
-                f"{'='*20}\n"
-                f"\n"
-                f"<b>Signal:</b> {tfs_str} agree\n"
-                f"<b>Strength:</b> {strength} ({n_agree}/{max_tfs} TF)\n"
-                f"<b>Confidence:</b> {best_signal['confidence']}/3\n"
-                f"\n"
-                f"<b>WHY:</b>\n"
-                f"  {chr(10).join(reason_lines)}\n"
-                f"\n"
-                f"<b>ENTRY:</b>\n"
-                f"  Limit: <code>{entry['limit_price']:,.1f}</code>\n"
-                f"  Current: <code>{entry['current_price']:,.1f}</code>\n"
-                f"\n"
-                f"<b>RISK/REWARD:</b>\n"
-                f"  SL: <code>{entry['sl']:,.1f}</code> (-{risk_pts:.1f} pts)\n"
-                f"  TP1: <code>{entry['tp1']:,.1f}</code> (+1xATR) [then SL->BE]\n"
-                f"  TP2: <code>{entry['tp2']:,.1f}</code> ({tp2_src})\n"
-                f"  TP3: <code>{entry['tp3']:,.1f}</code> (+{TP_ATR_MULT:.0f}xATR)\n"
-                f"  <b>R:R = {rr_str}</b>\n"
-                f"\n"
-                f"<i>RSI={best_signal['rsi']:.0f} | ADX={best_signal['adx']:.0f} | "
+            risk_pts   = abs(entry["limit_price"] - entry["sl"])
+            tp2_src    = _tp2_label(entry, direction)
+            rr_str     = f"{entry['rr_tp2']:.1f}:1"
+            entry_block = (
+                f"\n<b>ENTRY:</b>\n"
+                f"  Limit: <code>{entry['limit_price']:,.1f}</code>"
+                f"  (now: <code>{entry['current_price']:,.1f}</code>)\n"
+                f"\n<b>RISK / REWARD:</b>\n"
+                f"  SL:  <code>{entry['sl']:,.1f}</code>  (-{risk_pts:.1f} pts)\n"
+                f"  TP1: <code>{entry['tp1']:,.1f}</code>  (+1xATR) \u2192 SL\u2192BE\n"
+                f"  TP2: <code>{entry['tp2']:,.1f}</code>  ({tp2_src})\n"
+                f"  TP3: <code>{entry['tp3']:,.1f}</code>  (+{TP_ATR_MULT:.0f}xATR)\n"
+                f"  <b>R:R = {rr_str}</b>"
+            )
+            indicator_line = (
+                f"<i>RSI={ref_sig['rsi']:.0f} | ADX={ref_sig['adx']:.0f} | "
                 f"ATR={entry['atr_1m']:.1f} | VWAP={entry['vwap']:,.1f}</i>"
             )
         else:
-            msg = (
-                f"{'='*20}\n"
-                f"<b>[{strength_emoji}] {direction} - Combo {combo_short}</b>\n"
-                f"{'='*20}\n"
-                f"\n"
-                f"<b>Signal:</b> {tfs_str} agree\n"
-                f"<b>Strength:</b> {strength} ({n_agree}/{max_tfs} TF)\n"
-                f"<b>Confidence:</b> {best_signal['confidence']}/3\n"
-                f"\n"
-                f"<b>WHY:</b>\n"
-                f"  {chr(10).join(reason_lines)}\n"
-                f"\n"
-                f"<b>RISK/REWARD:</b>\n"
-                f"  Price: <code>{best_signal['price']:,.1f}</code>\n"
-                f"  SL: ~{risk_pts:.1f} pts\n"
-                f"  TP: ~{reward_pts:.1f} pts\n"
-                f"  <b>R:R = {rr_str}</b>\n"
-                f"\n"
-                f"<i>RSI={best_signal['rsi']:.0f} | ADX={best_signal['adx']:.0f} | "
-                f"ATR={best_signal['atr']:.1f}</i>"
+            risk_pts  = ref_sig["atr"] * SL_ATR_MULT
+            reward_pts = ref_sig["atr"] * TP_ATR_MULT
+            rr_str    = f"{TP_ATR_MULT/SL_ATR_MULT:.1f}:1"
+            entry_block = (
+                f"\n<b>RISK / REWARD (est.):</b>\n"
+                f"  Price: <code>{ref_sig['price']:,.1f}</code>\n"
+                f"  SL: ~{risk_pts:.1f} pts | TP: ~{reward_pts:.1f} pts\n"
+                f"  <b>R:R = {rr_str}</b>"
+            )
+            indicator_line = (
+                f"<i>RSI={ref_sig['rsi']:.0f} | ADX={ref_sig['adx']:.0f} | "
+                f"ATR={ref_sig['atr']:.1f}</i>"
             )
 
+        conds_str = ", ".join(sorted(all_conds_merged)) if all_conds_merged else "Score-based"
+
+        # --- Build consolidated message ---
+        sep = "\u2500" * 22
+        msg = (
+            f"{dir_icon} <b>{direction} \u2014 {SYMBOL}</b>\n"
+            f"{sep}\n"
+            f"<b>Combos ({n_combos}/{n_all_combos} agree):</b>\n"
+            + "\n".join(combo_lines) + "\n"
+            f"\n"
+            f"<b>Overall:</b> {overall_strength} | Score: {total_score}\n"
+            f"<b>Conditions:</b> {conds_str}\n"
+            + entry_block + "\n"
+            f"\n"
+            + indicator_line
+        )
+
         notifier.send(msg)
-        sent_alerts[alert_key] = time.time()
-        print(f"  -> ALERT SENT! (Combo {combo_short}, {strength})")
+
+        # Mark all keys for this direction as sent
+        for i in items:
+            sent_alerts[i["alert_key"]] = time.time()
+
+        # --- Portfolio position management ---
+        if portfolio_mgr and entry and n_combos >= MIN_COMBOS_ENTRY:
+            direction_int = 1 if direction == "BUY" else -1
+            best_tf = best_item["aligned_tfs"][-1]  # highest TF
+            best_conf = best_item["best_sig"]["confidence"]
+
+            # Check if we need to flip direction
+            if portfolio_mgr.should_flip(direction_int, best_tf, best_conf):
+                portfolio_mgr.execute_flip(entry["current_price"])
+
+            # Try to open position (respects direction lock + capacity)
+            if portfolio_mgr.can_open(direction_int):
+                portfolio_mgr.open_position(
+                    symbol=SYMBOL,
+                    direction=direction_int,
+                    entry_price=entry["limit_price"],
+                    atr=entry["atr_1m"],
+                    combo=best_item["combo_short"],
+                    timeframe=best_tf,
+                    confidence=best_conf,
+                )
+            elif portfolio_mgr.in_cooldown:
+                print(f"  [COOLDOWN] Signal rejected (cooldown={portfolio_mgr.cooldown_remaining})")
 
     if not any_signal:
-        print("  No signal.")
+        print(f"  No signal. Portfolio: {portfolio_mgr.status_str() if portfolio_mgr else 'N/A'}")
 
-    # Cleanup old alerts (older than 30 min to allow re-alert on new candle)
+    # Cleanup old alerts (older than 30 min)
     cutoff = time.time() - 1800
-    expired = [k for k, t in sent_alerts.items() if t < cutoff]
-    for k in expired:
+    for k in [k for k, t in sent_alerts.items() if t < cutoff]:
         del sent_alerts[k]
 
 
@@ -646,32 +718,74 @@ def main():
     print(f"Risk: SL {SL_ATR_MULT}*ATR | TP {TP_ATR_MULT}*ATR | R:R {TP_ATR_MULT/SL_ATR_MULT:.1f}:1")
     print("=" * 50)
 
+    trade_logger = TradeLogger(log_dir="logs")
+    portfolio_manager = PortfolioManager(
+        notifier=notifier,
+        logger=trade_logger,
+        max_contracts=3,
+        flip_cooldown=3,
+    )
+    # Legacy single-position manager (kept for compatibility)
+    position_manager = PositionManager(
+        notifier=notifier,
+        logger=trade_logger,
+        sl_atr_mult=SL_ATR_MULT,
+        tp_atr_mult=TP_ATR_MULT,
+    )
+
     sent_alerts = {}
 
     if args.once:
-        run_scan(fetcher, notifier, sent_alerts)
+        run_scan(fetcher, notifier, sent_alerts, position_manager,
+                 portfolio_mgr=portfolio_manager)
         return
 
     # Send startup notification
     combo_labels = ", ".join(n.split(':')[0].strip() for n in active_combos)
     notifier.send(
-        f"<b>Scanner v2 Started</b>\n"
+        f"<b>Scanner v3 Started</b>\n"
         f"Symbol: <code>{SYMBOL}</code>\n"
         f"TFs: {', '.join(SIGNAL_TIMEFRAMES)} (multi-TF agreement)\n"
         f"Combos: {combo_labels}\n"
         f"Scan: every {SCAN_INTERVAL}s\n"
-        f"R:R = {TP_ATR_MULT/SL_ATR_MULT:.1f}:1 (SL {SL_ATR_MULT}x / TP {TP_ATR_MULT}x ATR)"
+        f"Portfolio: max {portfolio_manager.max_contracts} contracts, "
+        f"cooldown {portfolio_manager.flip_cooldown} bars\n"
+        f"Status: {portfolio_manager.status_str()}"
     )
+
+    _eod_sent_date: str = ""  # track which date we already sent EOD summary
 
     while True:
         try:
+            now = vn_now()
+
+            # --- End-of-day: close all positions + send summary ---
+            today_str = now.strftime("%Y-%m-%d")
+            after_close = (now.hour, now.minute) >= (14, 31)
+            if after_close and now.weekday() < 5 and _eod_sent_date != today_str:
+                _eod_sent_date = today_str
+                # Close any remaining positions
+                if portfolio_manager.n_open > 0:
+                    try:
+                        _df_eod = fetcher.get_futures_ohlcv(
+                            SYMBOL, today_str, today_str, interval="1m")
+                        if _df_eod is not None and len(_df_eod) > 0:
+                            last_price = float(_df_eod.iloc[-1]["close"])
+                            portfolio_manager.close_all(last_price, reason="EOD")
+                    except Exception as _e:
+                        print(f"  [EOD CLOSE ERROR] {_e}")
+                # Send daily summary
+                summary = trade_logger.daily_summary(today_str)
+                notifier.send(summary)
+                print(f"[EOD] Daily summary sent for {today_str}")
+
             if not is_trading_hours():
-                now = vn_now()
                 print(f"\r[{now.strftime('%H:%M:%S')}] Outside trading hours. Waiting...", end="")
                 time.sleep(60)
                 continue
 
-            run_scan(fetcher, notifier, sent_alerts)
+            run_scan(fetcher, notifier, sent_alerts, position_manager,
+                     portfolio_mgr=portfolio_manager)
         except KeyboardInterrupt:
             print("\nStopped by user.")
             break
