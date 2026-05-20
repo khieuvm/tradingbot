@@ -494,8 +494,12 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         combo_enabled = get_enabled_from_combo(combo_name)
         combo_short = combo_name.split(":")[0].strip()
 
+        # Skip combos not in COMBO_TF_MAP (disabled)
+        if combo_short not in COMBO_TF_MAP:
+            continue
+
         # Filter TFs based on backtest effectiveness
-        allowed_tfs = COMBO_TF_MAP.get(combo_short, SIGNAL_TIMEFRAMES)
+        allowed_tfs = COMBO_TF_MAP[combo_short]
 
         # Collect signals per TF
         tf_signals = {}
@@ -691,12 +695,15 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="VN30F1M Multi-TF Signal Scanner v2")
+    parser = argparse.ArgumentParser(description="VN30F1M Multi-TF Signal Scanner v3")
     parser.add_argument("--once", action="store_true", help="Run once then exit")
     args = parser.parse_args()
 
-    # All combos with primary conditions
-    active_combos = [name for name, p in COMBO_PRESETS.items() if p.get("primary")]
+    # Only combos in COMBO_TF_MAP are active
+    active_combos = [
+        name for name, p in COMBO_PRESETS.items()
+        if p.get("primary") and name.split(":")[0].strip() in COMBO_TF_MAP
+    ]
 
     fetcher = DataFetcher()
     notifier = TelegramNotifier()
