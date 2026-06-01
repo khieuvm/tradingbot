@@ -191,6 +191,14 @@ combo_risk:
     tp_atr_mult: 2.5
     trailing_offset: 0.8
     trailing_step: 0.4
+  Y/5m:
+    max_hold: 30
+    min_confidence: 2
+    sl_atr_mult: 1.5
+    tp_atr_mult: 5.0
+    trailing_offset: 1.0
+    trailing_step: 0.5
+    daily_dir_loss_cap: 2
   V2/5m:
     max_hold: 20
     min_confidence: 1
@@ -298,21 +306,23 @@ combo_risk:
     trailing_offset: 1.5
     trailing_step: 1.5
   X/5m:
-    max_hold: 20
+    max_hold: 15
     min_confidence: 1
-    sl_atr_mult: 1.5
+    sl_atr_mult: 2.0
     tp_atr_mult: 3.0
-    trailing_offset: 1.5
-    trailing_step: 1.5
+    trailing_offset: 1.0
+    trailing_step: 0.5
+    entry_limit_offset: 0.5
 combo_tf_map:
   D:
   - 5m
   J:
   - 5m
   X:
-  - 3m
   - 5m
   V:
+  - 5m
+  Y:
   - 5m
 combos:
   A_Trend_Pullback:

@@ -131,6 +131,22 @@ SL_ATR_MULT = 1.5
 TP_ATR_MULT = 3.0
 MIN_COMBOS_ENTRY = 2       # Minimum combos agreeing to simulate a trade entry
 COMBO_RISK = {}            # Per-combo/TF risk params from YAML
+DAILY_DIR_LOSSES = {}      # Daily same-direction loss tracker: {combo_short: {date: {dir: count}}}
+
+
+def record_daily_loss(combo_short: str, direction: str):
+    """Record a loss for daily same-direction cap tracking."""
+    from datetime import datetime, timezone, timedelta
+    today = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
+    if combo_short not in DAILY_DIR_LOSSES:
+        DAILY_DIR_LOSSES[combo_short] = {}
+    if today not in DAILY_DIR_LOSSES[combo_short]:
+        DAILY_DIR_LOSSES[combo_short][today] = {}
+    cur = DAILY_DIR_LOSSES[combo_short][today].get(direction, 0)
+    DAILY_DIR_LOSSES[combo_short][today][direction] = cur + 1
+    print(f"  [LOSS CAP] {combo_short} {direction} loss #{cur+1} today")
+
+
 PARAMS = {
     "fast_ma": 10, "slow_ma": 20, "rsi_period": 7,
     "oversold": 35, "overbought": 70,
@@ -819,6 +835,17 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         if skip_exhaustion:
             continue
 
+        # Daily same-direction loss cap
+        risk_key = f"{combo_short}/{aligned_tfs[-1]}"
+        dir_loss_cap = COMBO_RISK.get(risk_key, {}).get("daily_dir_loss_cap", 0)
+        if dir_loss_cap > 0:
+            today_str = vn_now().strftime("%Y-%m-%d")
+            combo_losses = DAILY_DIR_LOSSES.get(combo_short, {}).get(today_str, {})
+            dir_losses = combo_losses.get(direction, 0)
+            if dir_losses >= dir_loss_cap:
+                print(f"  [{combo_short}] {direction} SKIP (daily loss cap: {dir_losses}/{dir_loss_cap})")
+                continue
+
         # Determine trigger price (signal bar high/low)
         if tf_data is not None and not tf_data.empty:
             last_bar = tf_data.iloc[-1]
@@ -927,6 +954,8 @@ def main():
         max_contracts=3,
         flip_cooldown=3,
     )
+    portfolio_manager.on_close_callback = lambda combo, direction, pnl: record_daily_loss(combo, direction)
+
     # Legacy single-position manager (kept for compatibility)
     position_manager = PositionManager(
         notifier=notifier,

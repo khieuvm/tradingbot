@@ -509,6 +509,19 @@ COMBO_PRESETS = {
                     "vol_surge_gate", "obv_trend_gate",
                     "ema200_bias_gate", "ema_slope_gate"],
     },
+    # ===== COUNTER-TREND REVERSAL =====
+    "Y: Extreme Reversal": {
+        "desc": "Counter-trend reversal catcher. Intentionally NO ema200_bias_gate. "
+                "Catches moves D/J/V miss: drops from above EMA200 (overbought -> crash), "
+                "rallies from below EMA200 (oversold -> bounce). "
+                "Primary: liquidity_sweep (stop hunt) OR pullback_reversal (3-bar pullback + candle). "
+                "candle_reversal_gate: require bullish bar or bearish prev for BUY (vice versa SELL). "
+                "SL=1.5, TP=5.0, MH=30. Trail 1.0/0.5.",
+        "primary": ["pullback_reversal", "liquidity_sweep"],
+        "confirm": ["vwap_side_bounce", "mfi_confirm", "macd_hist_rev",
+                    "obv_confirm", "williams_extreme", "adx_di"],
+        "gate":    ["session_open_filter", "candle_reversal_gate"],
+    },
 }
 
 # Condition labels for display
@@ -634,6 +647,8 @@ ALL_COND_KEYS = [
     "strong_candle_gate",
     # Universal WR boost gates
     "ema200_bias_gate", "ema_slope_gate", "prev_bar_gate",
+    # Candle-based reversal gate
+    "candle_reversal_gate", "adx_min_gate",
 ]
 
 
@@ -1603,16 +1618,23 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df.loc[ribbon_bear_gate, "_s_ribbon_trend_filter"] = 1
 
     # --- 27. Session Open Filter (GATE) ---
-    # Block signals in first 5 minutes after market open (9:00-9:05, 13:00-13:05)
-    # These are volatile/noisy periods with unreliable signals
+    # Block signals in first 5 minutes after AM open (9:00-9:05)
+    # and first 10 minutes after PM open (13:00-13:10)
+    # PM gets longer filter because gap reversals at PM open cause false signals
     if enabled.get("session_open_filter", False):
         if "time" in df.columns:
             _times = pd.to_datetime(df["time"])
-            _h = _times.dt.hour
-            _m = _times.dt.minute
+        elif isinstance(df.index, pd.DatetimeIndex):
+            _times = df.index
+        else:
+            _times = None
+
+        if _times is not None:
+            _h = _times.hour
+            _m = _times.minute
             _session_settled = ~(
                 ((_h == 9) & (_m < 5)) |
-                ((_h == 13) & (_m < 5))
+                ((_h == 13) & (_m < 10))
             )
         else:
             _session_settled = pd.Series(True, index=df.index)
@@ -1625,6 +1647,32 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         _adx_trending = df["adx"] > 20
         df.loc[_adx_trending, "_b_adx_trend_filter"] = 1
         df.loc[_adx_trending, "_s_adx_trend_filter"] = 1
+
+    # --- 28b. ADX Minimum Gate (GATE) ---
+    # Lighter version: ADX >= 12. Blocks signals in completely dead/choppy markets.
+    # Used by Y (reversal) to avoid false reversals when there's no momentum at all.
+    if enabled.get("adx_min_gate", False):
+        _adx_min = df["adx"] >= 12
+        df.loc[_adx_min, "_b_adx_min_gate"] = 1
+        df.loc[_adx_min, "_s_adx_min_gate"] = 1
+
+    # --- 28c. Candle Reversal Gate (GATE) ---
+    # Require at least ONE candle-based reversal evidence:
+    #   - candle_confirms: signal bar direction matches signal (bullish for BUY, bearish for SELL)
+    #   - prev_setup: previous bar was opposite direction (proper setup before reversal)
+    # If NEITHER present → no reversal evidence → block signal.
+    # Blocks ~43% of losses while only sacrificing tiny wins (<1pt).
+    if enabled.get("candle_reversal_gate", False):
+        _bullish_bar = df["close"] > df["open"]
+        _bearish_bar = df["close"] < df["open"]
+        _prev_bullish = _bullish_bar.shift(1, fill_value=False)
+        _prev_bearish = _bearish_bar.shift(1, fill_value=False)
+        # BUY: bar is bullish OR prev bar was bearish (setup)
+        _buy_ok = _bullish_bar | _prev_bearish
+        # SELL: bar is bearish OR prev bar was bullish (setup)
+        _sell_ok = _bearish_bar | _prev_bullish
+        df.loc[_buy_ok, "_b_candle_reversal_gate"] = 1
+        df.loc[_sell_ok, "_s_candle_reversal_gate"] = 1
 
     # --- 29. Market Regime Filter (GATE) ---
     # BUY only when price above EMA55 (bullish regime)
@@ -2651,6 +2699,9 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
 
     if preset and preset.get("primary"):
         # --- COMBO MODE ---
+        # In combo mode, only apply vol_filter if "vol_filter" is in gate list
+        combo_use_vol = "vol_filter" in set(preset.get("gate", []))
+
         primary_keys = set(preset["primary"])
         confirm_keys = set(preset["confirm"])
         all_cond_keys = [k for k in enabled if k != "vol_filter" and enabled.get(k)]
@@ -2688,7 +2739,7 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         buy_confidence = df["confirm_buy"].clip(0, 3).astype(int) + 1
         sell_confidence = df["confirm_sell"].clip(0, 3).astype(int) + 1
 
-        if use_vol:
+        if combo_use_vol:
             df.loc[buy_triggered & df["vol_ok"], "signal"] = 1
             df.loc[buy_triggered & df["vol_ok"], "signal_confidence"] = buy_confidence
             df.loc[sell_triggered & df["vol_ok"], "signal"] = -1

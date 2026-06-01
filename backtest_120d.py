@@ -86,10 +86,12 @@ def simulate_trades(sig_df, combo_key, entry_limit_offset=0.0):
     trail_offset = risk.get("trailing_offset", 0.5)
     trail_step = risk.get("trailing_step", 0.3)
     min_conf = risk.get("min_confidence", 1)
+    daily_dir_loss_cap = risk.get("daily_dir_loss_cap", 0)  # 0 = disabled
 
     trades = []
     open_pos = None
     pending_signal = None  # waiting for next-bar confirmation
+    daily_losses = {}  # {date_str: {1: count, -1: count}}
     n = len(sig_df)
 
     for i in range(n):
@@ -202,6 +204,12 @@ def simulate_trades(sig_df, combo_key, entry_limit_offset=0.0):
                     "pnl_points": round(pnl, 2),
                     "pnl_vnd": round(pnl * POINT_VALUE, 0),
                 })
+                # Track daily directional losses for cap
+                if daily_dir_loss_cap > 0 and pnl < 0:
+                    day_key = bar_time.strftime("%Y-%m-%d") if hasattr(bar_time, 'strftime') else str(bar_time)[:10]
+                    if day_key not in daily_losses:
+                        daily_losses[day_key] = {1: 0, -1: 0}
+                    daily_losses[day_key][open_pos["direction"]] += 1
                 open_pos = None
 
         # --- Check for new signal (creates pending, NOT immediate entry) ---
@@ -213,6 +221,13 @@ def simulate_trades(sig_df, combo_key, entry_limit_offset=0.0):
 
         if signal == 0 or confidence < min_conf:
             continue
+
+        # Daily same-direction loss cap
+        if daily_dir_loss_cap > 0:
+            day_key = bar_time.strftime("%Y-%m-%d") if hasattr(bar_time, 'strftime') else str(bar_time)[:10]
+            day_dir_losses = daily_losses.get(day_key, {}).get(signal, 0)
+            if day_dir_losses >= daily_dir_loss_cap:
+                continue
 
         atr = float(row.get("atr", 0))
         if atr <= 0:

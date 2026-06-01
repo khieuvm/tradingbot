@@ -38,6 +38,7 @@ class PortfolioManager:
         self.current_direction: int = 0  # 0=flat, 1=long, -1=short
         self.cooldown_remaining: int = 0
         self._next_pos_id: int = 1
+        self.on_close_callback = None  # callback(combo_short, direction_str, pnl_pts)
 
         # Load per-combo risk from config
         self.combo_risk = self._load_combo_risk()
@@ -310,6 +311,10 @@ class PortfolioManager:
         )
         print(f"  [{reason}] #{pos['pos_id']} {dir_str} {pos['combo']}({pos['tf']}) "
               f"@ {exit_price:.1f} PnL={pnl_pts:+.1f} pts")
+
+        # Notify callback for loss tracking (daily cap)
+        if self.on_close_callback and pnl_pts < 0:
+            self.on_close_callback(pos.get("combo", ""), dir_str, pnl_pts)
 
     def close_all(self, current_price: float, reason: str = "EOD"):
         """Close all open positions (end of day)."""
