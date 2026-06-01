@@ -55,14 +55,43 @@ class DataFetcher:
         """Lấy dữ liệu OHLCV phái sinh (VN30F1M, VN30F2M, VN30F1Q, VN30F2Q)
 
         Args:
-            symbol: Mã hợp đồng phái sinh (e.g., "VN30F1M", "VN30F2M")
+            symbol: Mã hợp đồng phái sinh (e.g., "VN30F1M")
             start: Ngày bắt đầu "YYYY-MM-DD"
             end: Ngày kết thúc "YYYY-MM-DD"
-            interval: Khung thời gian ("1D", "1W")
+            interval: Khung thời gian ("1m","3m","5m","15m","1D",...).
+                      Nếu interval không được hỗ trợ bởi API (ví dụ "3m"),
+                      sẽ tự động fetch "1m" rồi resample.
         """
+        # Intervals that need to be resampled from 1m
+        _RESAMPLE_FROM_1M = {"3m", "2m", "4m", "10m"}
+        if interval in _RESAMPLE_FROM_1M:
+            tf_min = int(interval.rstrip("m"))
+            df1m = self.get_futures_ohlcv(symbol, start, end, interval="1m")
+            return self._resample_ohlcv(df1m, tf_min)
         count = self._calc_count(start, end, interval)
         df = self.market.futures(symbol).ohlcv(start=start, end=end, interval=interval, count=count)
         return df
+
+    @staticmethod
+    def _resample_ohlcv(df1m: pd.DataFrame, tf_min: int) -> pd.DataFrame:
+        """Resample 1m OHLCV to N-minute bars, keeping only VN session hours."""
+        df = df1m.copy()
+        df["time"] = pd.to_datetime(df["time"])
+        resampled = (
+            df.set_index("time")
+            .resample(f"{tf_min}min", label="left", closed="left")
+            .agg({"open": "first", "high": "max", "low": "min",
+                  "close": "last", "volume": "sum"})
+            .dropna(subset=["open"])
+            .reset_index()
+        )
+        # Keep only VN trading session bars (AM: 09:00-11:30, PM: 13:00-14:30)
+        h = resampled["time"].dt.hour
+        m = resampled["time"].dt.minute
+        mins = h * 60 + m
+        in_session = ((mins >= 9 * 60) & (mins < 11 * 60 + 30)) | \
+                     ((mins >= 13 * 60) & (mins < 14 * 60 + 30))
+        return resampled[in_session].reset_index(drop=True)
 
     def get_futures_info(self, symbol: str = "VN30F1M") -> dict:
         """Lấy thông tin chi tiết hợp đồng phái sinh"""
