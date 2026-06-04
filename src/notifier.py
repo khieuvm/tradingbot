@@ -8,6 +8,11 @@ import json
 from config import Config
 
 
+def _esc(text: str) -> str:
+    """Escape special HTML characters for Telegram HTML parse mode."""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 class TelegramNotifier:
     """Send trading alerts via Telegram (lightweight, no python-telegram-bot dependency)"""
 
@@ -56,13 +61,13 @@ class TelegramNotifier:
 
         lines = [
             header,
-            f"<b>Symbol:</b> <code>{symbol}</code>",
+            f"<b>Symbol:</b> <code>{_esc(symbol)}</code>",
             f"<b>Price:</b> <code>{price:,.1f}</code>",
             f"<b>Confidence:</b> {'*' * confidence} ({confidence}/3)",
         ]
 
         if combo_name:
-            lines.append(f"<b>Strategy:</b> {combo_name}")
+            lines.append(f"<b>Strategy:</b> {_esc(combo_name)}")
 
         if sl and tp:
             lines.append(f"<b>SL:</b> <code>{sl:,.1f}</code> | <b>TP:</b> <code>{tp:,.1f}</code>")
@@ -72,13 +77,13 @@ class TelegramNotifier:
         lines.append("")
         lines.append("<b>Conditions met:</b>")
         for cond in conditions_fired:
-            lines.append(f"  - {cond}")
+            lines.append(f"  - {_esc(cond)}")
 
         if extra:
             lines.append("")
             lines.append("<b>Context:</b>")
             for k, v in extra.items():
-                lines.append(f"  {k}: <code>{v}</code>")
+                lines.append(f"  {_esc(k)}: <code>{_esc(v)}</code>")
 
         self.send("\n".join(lines))
 

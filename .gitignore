@@ -11,6 +11,9 @@ build/
 .idea/
 .vscode/
 
+# Logs (daily trade logs — machine-specific)
+logs/*.jsonl
+
 # Temp analysis/optimization scripts
 analyze_*.py
 count_swings.py

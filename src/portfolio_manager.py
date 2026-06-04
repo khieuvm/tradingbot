@@ -7,6 +7,8 @@ Rules:
 - Flip cooldown after direction reversal
 - 15m signals have priority over 5m
 - Per-combo SL/TP from strategy_config.yaml
+- AM/PM session-aware trailing (validated backtest: +6.34/d)
+- Adaptive exit: AM + pre_move/ATR > 0.8 → exit@4pts
 """
 
 from datetime import datetime, timedelta, timezone
@@ -19,20 +21,28 @@ from src.trade_logger import TradeLogger
 
 VN_TZ = timezone(timedelta(hours=7))
 POINT_VALUE = 100_000
-COMMISSION = 0.47  # pts per side
+COMMISSION = 0.47  # pts per side (0.46 actual, rounded up)
 
 CONFIG_PATH = Path(__file__).parent.parent / "strategy_config.yaml"
+
+# Fallback defaults — overridden by strategy_config.yaml session_params + adaptive_exit
+_DEFAULT_SESSION_PARAMS = {
+    "AM": {"sl_atr_mult": 1.2, "trail_activate_pts": 5.0, "trail_atr_mult": 2.0, "max_hold_bars": 24},
+    "PM": {"sl_atr_mult": 1.0, "trail_activate_pts": 4.0, "trail_atr_mult": 1.5, "max_hold_bars": 12},
+}
 
 
 class PortfolioManager:
     """Manages multiple positions with portfolio-level direction lock."""
 
     def __init__(self, notifier: TelegramNotifier, logger: TradeLogger,
-                 max_contracts: int = 3, flip_cooldown: int = 3):
+                 max_contracts: int = 3, flip_cooldown: int = 3,
+                 executor=None):
         self.notifier = notifier
         self.logger = logger
         self.max_contracts = max_contracts
         self.flip_cooldown = flip_cooldown
+        self.executor = executor  # Optional DnseExecutor; None = signal-only mode
 
         self.positions: list[dict] = []  # list of open positions
         self.current_direction: int = 0  # 0=flat, 1=long, -1=short
@@ -40,17 +50,32 @@ class PortfolioManager:
         self._next_pos_id: int = 1
         self.on_close_callback = None  # callback(combo_short, direction_str, pnl_pts)
 
-        # Load per-combo risk from config
-        self.combo_risk = self._load_combo_risk()
+        # Load all params from strategy_config.yaml (single source of truth)
+        self._load_config()
 
-    def _load_combo_risk(self) -> dict:
-        """Load per-combo SL/TP multipliers from strategy_config.yaml."""
+    def _load_config(self):
+        """Load session params, adaptive exit, and combo risk from strategy_config.yaml."""
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f)
-            return cfg.get("combo_risk", {})
         except Exception:
-            return {}
+            cfg = {}
+
+        # Session-specific trailing/SL params
+        sp = cfg.get("session_params", {})
+        self.session_params = {}
+        for sess, defaults in _DEFAULT_SESSION_PARAMS.items():
+            self.session_params[sess] = {k: sp.get(sess, {}).get(k, v) for k, v in defaults.items()}
+
+        # Adaptive exit params
+        ae = cfg.get("adaptive_exit", {})
+        self.adaptive_exit_enabled = ae.get("enabled", True)
+        self.adaptive_exit_session = ae.get("session", "AM")
+        self.adaptive_exit_ratio = ae.get("pre_move_ratio_threshold", 0.8)
+        self.adaptive_exit_pts = ae.get("exit_target_pts", 4.0)
+
+        # Per-combo SL/TP risk
+        self.combo_risk = cfg.get("combo_risk", {})
 
     def get_risk(self, combo: str) -> tuple[float, float]:
         """Get SL/TP multipliers for a combo."""
@@ -128,6 +153,8 @@ class PortfolioManager:
                 pos_id=pos["pos_id"],
                 timestamp=now,
             )
+            if self.executor is not None:
+                self.executor.close_position(pos["direction"], quantity=1)
 
         n_closed = len(self.positions)
         self.positions.clear()
@@ -152,14 +179,27 @@ class PortfolioManager:
         print(f"  [FLIP] Closed {n_closed} positions @ {current_price:.1f} "
               f"(PnL={closed_pnl:+.1f} pts)")
 
+    @staticmethod
+    def _detect_session() -> str:
+        """Detect current trading session: AM or PM."""
+        now = datetime.now(VN_TZ)
+        current_mins = now.hour * 60 + now.minute
+        if current_mins < 11 * 60 + 30:
+            return "AM"
+        return "PM"
+
     def open_position(self, symbol: str, direction: int, entry_price: float,
                       atr: float, combo: str, timeframe: str,
-                      confidence: int = 0):
-        """Open a new position in the portfolio."""
+                      confidence: int = 0, pre_move_ratio: float = 0.0):
+        """Open a new position in the portfolio with session-aware SL."""
         if not self.can_open(direction):
             return None
 
-        sl_mult, tp_mult = self.get_risk(combo)
+        session = self._detect_session()
+        session_params = self.session_params[session]
+
+        sl_mult = session_params["sl_atr_mult"]
+        _, tp_mult = self.get_risk(combo)
         sl = entry_price - direction * sl_mult * atr
         tp = entry_price + direction * tp_mult * atr
         now = datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -178,7 +218,10 @@ class PortfolioManager:
             "tf": timeframe,
             "confidence": confidence,
             "opened_at": now,
+            "session": session,
+            "pre_move_ratio": pre_move_ratio,
             "tp1_hit": False,
+            "bars_held": 0,
         }
         self.positions.append(pos)
         self.current_direction = direction
@@ -188,6 +231,9 @@ class PortfolioManager:
             sl=sl, tp=tp, atr=atr, combo=combo, timeframe=timeframe,
             confidence=confidence, pos_id=pos_id, timestamp=now,
         )
+        if self.executor is not None:
+            self.executor.place_order(direction, quantity=1,
+                                      price=entry_price, order_type="LO")
 
         dir_str = "BUY" if direction == 1 else "SELL"
         slot_str = f"{self.n_open}/{self.max_contracts}"
@@ -196,19 +242,26 @@ class PortfolioManager:
             f"{dir_str} {symbol} @ <code>{entry_price:,.1f}</code>\n"
             f"SL: <code>{sl:,.1f}</code> ({sl_mult}x ATR)\n"
             f"TP: <code>{tp:,.1f}</code> ({tp_mult}x ATR)\n"
-            f"Combo: {combo}({timeframe}) | Conf: {confidence}"
+            f"Combo: {combo}({timeframe}) | {session} | PMR: {pre_move_ratio:.2f}"
         )
         print(f"  [ENTRY {slot_str}] {dir_str} {symbol} @ {entry_price:.1f} "
-              f"(SL={sl:.1f}, TP={tp:.1f}) {combo}({timeframe})")
+              f"(SL={sl:.1f}, TP={tp:.1f}) {combo}({timeframe}) [{session}]")
         return pos
 
     def update_prices(self, symbol: str, high: float, low: float,
-                      close: float, atr: float):
+                      close: float, atr: float, regime: str = "NORMAL"):
         """
         Update all positions with latest price bar.
-        Check SL/TP hits. Apply trailing SL after TP1.
+        Session-aware trailing (AM/PM split params from validated backtest).
+        Adaptive exit: AM + pre_move_ratio > 0.8 → exit@4pts.
+        Breakeven at +4pts when ATR>=3.5.
+        Trail tightening at +8pts when ATR>=3.5.
+        Session-aware tightening: PM only, from 14:15 (14 mins before close).
+        Max hold bars enforcement.
         """
-        now = datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        now_dt = datetime.now(VN_TZ)
+        now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        mins_to_close = self._minutes_until_session_end(now_dt)
         to_remove = []
 
         for i, pos in enumerate(self.positions):
@@ -217,33 +270,124 @@ class PortfolioManager:
 
             direction = pos["direction"]
             entry = pos["entry"]
+            entry_atr = pos.get("atr", atr)
+            session = pos.get("session", "AM")
+            pre_move_ratio = pos.get("pre_move_ratio", 0.0)
+            session_params = self.session_params[session]
+
+            pos["bars_held"] = pos.get("bars_held", 0) + 1
 
             # Current PnL
             if direction == 1:
                 pnl_pts = close - entry
+                mfe = high - entry
             else:
                 pnl_pts = entry - close
+                mfe = entry - low
 
-            # --- TP1 check (1x ATR profit) → move SL to breakeven ---
-            if not pos["tp1_hit"] and pnl_pts >= pos["atr"]:
+            # Track max favorable excursion
+            pos["mfe"] = max(pos.get("mfe", 0), mfe)
+
+            # --- Adaptive exit: AM + pre_move_ratio > threshold → exit@4pts ---
+            if (session == self.adaptive_exit_session
+                    and pre_move_ratio > self.adaptive_exit_ratio
+                    and pos["mfe"] >= self.adaptive_exit_pts and not pos.get("adapt_exited")):
+                pnl = direction * (close - entry) - 2 * COMMISSION
+                if pnl_pts >= self.adaptive_exit_pts * 0.8:
+                    self._close_one(i, close, "ADAPT_EXIT", pnl, now)
+                    to_remove.append(i)
+                    continue
+                else:
+                    pos["adapt_exited"] = True
+                    if direction == 1:
+                        pos["sl"] = max(pos["sl"], entry + 2.0)
+                    else:
+                        pos["sl"] = min(pos["sl"], entry - 2.0)
+
+            # --- Session-time exits (match backtest: AM 11:25, PM 14:25) ---
+            current_mins = now_dt.hour * 60 + now_dt.minute
+            if session == "AM" and current_mins >= 11 * 60 + 25:
+                pnl = direction * (close - entry) - 2 * COMMISSION
+                self._close_one(i, close, "SESSION", pnl, now)
+                to_remove.append(i)
+                continue
+            if session == "PM" and current_mins >= 14 * 60 + 25:
+                pnl = direction * (close - entry) - 2 * COMMISSION
+                self._close_one(i, close, "SESSION", pnl, now)
+                to_remove.append(i)
+                continue
+            # AM position persisting past lunch break (should never happen, safety net)
+            if session == "AM" and current_mins >= 13 * 60:
+                pnl = direction * (close - entry) - 2 * COMMISSION
+                self._close_one(i, close, "SESSION", pnl, now)
+                to_remove.append(i)
+                continue
+
+            # --- Max hold (time-based, matches backtest: max_hold_bars × 5 min per bar) ---
+            max_hold_bars = session_params["max_hold_bars"]
+            try:
+                opened_dt = datetime.strptime(
+                    pos["opened_at"], "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=VN_TZ)
+                elapsed_min = (now_dt - opened_dt).total_seconds() / 60
+            except Exception:
+                elapsed_min = 0
+            if elapsed_min >= max_hold_bars * 5:
+                pnl = direction * (close - entry) - 2 * COMMISSION
+                self._close_one(i, close, "MAX_HOLD", pnl, now)
+                to_remove.append(i)
+                continue
+
+            # --- Breakeven at +4pts when entry ATR >= 3.5 (matches backtest) ---
+            trail_activate = session_params["trail_activate_pts"]
+            trail_atr_mult = session_params["trail_atr_mult"]
+            if not pos.get("be_done") and entry_atr >= 3.5 and pos["mfe"] >= 4.0:
+                pos["be_done"] = True
+                new_sl = entry
+                if direction == 1 and new_sl > pos["sl"]:
+                    pos["sl"] = new_sl
+                elif direction == -1 and new_sl < pos["sl"]:
+                    pos["sl"] = new_sl
+
+            # --- TP1 notification: pnl >= 1×ATR (UX only, not a gate) ---
+            be_threshold = 0.7 * entry_atr if regime == "RANGING" else entry_atr
+            if not pos["tp1_hit"] and pnl_pts >= be_threshold:
                 pos["tp1_hit"] = True
-                pos["sl"] = entry  # breakeven
                 self.notifier.send(
-                    f"\U0001f3af <b>TP1 Hit - SL\u2192BE</b>\n"
+                    f"\U0001f3af <b>TP1 Hit</b>\n"
                     f"#{pos['pos_id']} {pos['combo']}({pos['tf']}): "
-                    f"+{pnl_pts:.1f} pts"
+                    f"+{pnl_pts:.1f} pts [{session}]"
                 )
 
-            # --- Trailing SL after TP1 (trail by 1x ATR) ---
-            if pos["tp1_hit"] and atr > 0:
+            # --- Trail: anchored to best_price (matches backtest), entry ATR fixed ---
+            # best_price = entry + direction * mfe (running max high / min low)
+            if pos["mfe"] >= trail_activate and entry_atr > 0:
+                best_price = entry + direction * pos["mfe"]
+                # Tighten at +8pts when entry ATR >= 3.5
+                if entry_atr >= 3.5 and pos["mfe"] >= 8.0:
+                    trail_dist = 1.2 * entry_atr
+                else:
+                    trail_dist = trail_atr_mult * entry_atr
                 if direction == 1:
-                    trail_sl = close - atr
+                    trail_sl = best_price - trail_dist
                     if trail_sl > pos["sl"]:
                         pos["sl"] = trail_sl
                 else:
-                    trail_sl = close + atr
+                    trail_sl = best_price + trail_dist
                     if trail_sl < pos["sl"]:
                         pos["sl"] = trail_sl
+
+            # --- Session-aware exit: tighten SL from 14:15 in PM only ---
+            if session == "PM" and mins_to_close <= 14 and atr > 0:
+                tight_dist = 0.5 * atr
+                if direction == 1:
+                    tight_sl = close - tight_dist
+                    if tight_sl > pos["sl"]:
+                        pos["sl"] = tight_sl
+                else:
+                    tight_sl = close + tight_dist
+                    if tight_sl < pos["sl"]:
+                        pos["sl"] = tight_sl
 
             # --- Check SL hit ---
             sl_hit = False
@@ -282,6 +426,16 @@ class PortfolioManager:
         if not self.positions:
             self.current_direction = 0
 
+    @staticmethod
+    def _minutes_until_session_end(now: datetime) -> int:
+        """Minutes until position must be closed (AM 11:25, PM 14:29)."""
+        current_mins = now.hour * 60 + now.minute
+        if current_mins < 11 * 60 + 30:
+            return (11 * 60 + 25) - current_mins  # AM: close by 11:25
+        elif current_mins >= 13 * 60:
+            return (14 * 60 + 29) - current_mins  # PM: close by 14:29
+        return 999  # lunch break
+
     def _close_one(self, idx: int, exit_price: float, reason: str,
                    pnl_pts: float, timestamp: str):
         """Close a single position and log/notify."""
@@ -301,6 +455,8 @@ class PortfolioManager:
             pos_id=pos["pos_id"],
             timestamp=timestamp,
         )
+        if self.executor is not None:
+            self.executor.close_position(pos["direction"], quantity=1)
 
         icon = "\u2705" if pnl_pts > 0 else "\u274c"
         self.notifier.send(
@@ -312,8 +468,7 @@ class PortfolioManager:
         print(f"  [{reason}] #{pos['pos_id']} {dir_str} {pos['combo']}({pos['tf']}) "
               f"@ {exit_price:.1f} PnL={pnl_pts:+.1f} pts")
 
-        # Notify callback for loss tracking (daily cap)
-        if self.on_close_callback and pnl_pts < 0:
+        if self.on_close_callback:
             self.on_close_callback(pos.get("combo", ""), dir_str, pnl_pts)
 
     def close_all(self, current_price: float, reason: str = "EOD"):
@@ -338,6 +493,8 @@ class PortfolioManager:
                 pos_id=pos["pos_id"],
                 timestamp=now,
             )
+            if self.executor is not None:
+                self.executor.close_position(pos["direction"], quantity=1)
 
         pnl_vnd = total_pnl * POINT_VALUE
         n = len(self.positions)

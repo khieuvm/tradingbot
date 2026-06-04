@@ -1,5 +1,6 @@
 """
 Position Manager - Track open positions, trailing SL, TP management.
+Per-combo trailing config: some combos use fixed TP/SL, others trail after TP2.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -8,9 +9,18 @@ from src.trade_logger import TradeLogger
 
 VN_TZ = timezone(timedelta(hours=7))
 
+# Per-combo trailing configuration (backtest-optimized)
+# "fixed" = no trailing, just hard SL/TP
+# "trail_tp2" = activate trailing after +2xATR profit, trail by trail_atr * ATR
+COMBO_TRAIL_CONFIG = {
+    "P": {"mode": "trail_tp2", "activate_atr": 2.0, "trail_atr": 1.5},
+    "R": {"mode": "trail_tp2", "activate_atr": 2.0, "trail_atr": 1.5},
+    # All others default to "fixed"
+}
+
 
 class PositionManager:
-    """Manages simulated positions with trailing SL and tiered TP."""
+    """Manages simulated positions with per-combo trailing SL and tiered TP."""
 
     def __init__(self, notifier: TelegramNotifier, logger: TradeLogger,
                  sl_atr_mult: float = 1.5, tp_atr_mult: float = 3.0):
@@ -28,6 +38,11 @@ class PositionManager:
                       timeframe: str, n_combos: int, score: int):
         """Open a new tracked position."""
         now = datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+        # Determine trailing mode from combo short name
+        combo_short = combo.split(":")[0].strip() if ":" in combo else combo[:4]
+        trail_cfg = COMBO_TRAIL_CONFIG.get(combo_short, {"mode": "fixed"})
+
         self.positions[symbol] = {
             "direction": direction,
             "entry_price": entry_price,
@@ -41,6 +56,10 @@ class PositionManager:
             "opened_at": now,
             "highest_pnl": 0.0,
             "tp1_hit": False,
+            "trail_activated": False,
+            "trail_mode": trail_cfg["mode"],
+            "trail_activate_atr": trail_cfg.get("activate_atr", 2.0),
+            "trail_distance_atr": trail_cfg.get("trail_atr", 1.5),
         }
         self.logger.log_entry(
             symbol=symbol, direction=direction, entry_price=entry_price,
@@ -59,13 +78,14 @@ class PositionManager:
               f"(SL={sl:.1f}, TP={tp:.1f})")
 
     def update(self, symbol: str, current_price: float, current_atr: float):
-        """Update position: check SL/TP hit, apply trailing SL."""
+        """Update position: check SL/TP hit, apply per-combo trailing SL."""
         if symbol not in self.positions:
             return
 
         pos = self.positions[symbol]
         direction = pos["direction"]
         entry = pos["entry_price"]
+        atr = pos["atr"]
 
         # Calculate current PnL
         if direction == 1:  # BUY
@@ -76,27 +96,37 @@ class PositionManager:
         # Track highest PnL for trailing
         pos["highest_pnl"] = max(pos["highest_pnl"], pnl_pts)
 
-        # --- Check TP1 hit (1x ATR profit) → move SL to breakeven ---
-        tp1_level = pos["atr"]  # 1x ATR in points
-        if not pos["tp1_hit"] and pnl_pts >= tp1_level:
-            pos["tp1_hit"] = True
-            pos["sl"] = entry  # Move SL to breakeven
-            self.notifier.send(
-                f"🎯 <b>TP1 Hit - SL → Breakeven</b>\n"
-                f"{symbol}: +{pnl_pts:.1f} pts | SL moved to {entry:,.1f}"
-            )
-            print(f"  [POSITION] TP1 hit, SL moved to BE @ {entry:.1f}")
+        # --- Trailing logic based on combo config ---
+        trail_mode = pos.get("trail_mode", "fixed")
 
-        # --- Trailing SL after TP1 (trail by 1x ATR from highest) ---
-        if pos["tp1_hit"] and current_atr > 0:
-            if direction == 1:
-                trail_sl = current_price - current_atr
-                if trail_sl > pos["sl"]:
-                    pos["sl"] = trail_sl
-            else:
-                trail_sl = current_price + current_atr
-                if trail_sl < pos["sl"]:
-                    pos["sl"] = trail_sl
+        if trail_mode == "fixed":
+            # No trailing — just check hard SL/TP
+            pass
+        elif trail_mode == "trail_tp2":
+            # Activate trailing after profit >= activate_atr * ATR
+            activate_dist = pos["trail_activate_atr"] * atr
+            trail_dist = pos["trail_distance_atr"] * (current_atr if current_atr > 0 else atr)
+
+            if not pos["trail_activated"] and pos["highest_pnl"] >= activate_dist:
+                pos["trail_activated"] = True
+                # Lock profit: move SL to entry + 1xATR
+                lock_sl = entry + direction * 1.0 * atr
+                pos["sl"] = lock_sl
+                self.notifier.send(
+                    f"🎯 <b>Trail Activated (+{pos['highest_pnl']:.1f}pts)</b>\n"
+                    f"{symbol}: SL locked at {lock_sl:,.1f} (+1×ATR)"
+                )
+                print(f"  [POSITION] Trail activated, SL locked @ {lock_sl:.1f}")
+
+            if pos["trail_activated"]:
+                if direction == 1:
+                    new_trail = current_price - trail_dist
+                    if new_trail > pos["sl"]:
+                        pos["sl"] = new_trail
+                else:
+                    new_trail = current_price + trail_dist
+                    if new_trail < pos["sl"]:
+                        pos["sl"] = new_trail
 
         # --- Check SL hit ---
         sl_hit = False
@@ -106,7 +136,12 @@ class PositionManager:
             sl_hit = True
 
         if sl_hit:
-            reason = "SL (trailing)" if pos["tp1_hit"] else "SL (initial)"
+            if pos.get("trail_activated"):
+                reason = "SL (trailing)"
+            elif pos.get("tp1_hit"):
+                reason = "SL (breakeven)"
+            else:
+                reason = "SL (initial)"
             self._close_position(symbol, current_price, reason, pnl_pts)
             return
 

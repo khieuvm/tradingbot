@@ -1,528 +1,74 @@
-active_combo: all
-combo_risk:
-  N/15m:
-    max_hold: 15
-    min_confidence: 2
-    sl_atr_mult: 0.8
-    tp_atr_mult: 3.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      ADX_TREND_THR: 33
-      EMA_FAST: 12
-      EMA_SLOW: 50
-      RSI_OS: 38
-      RSI_OB: 65
-      VOL_MIN: 0.5
-      ATR_SPIKE_THR: 2.1
-  N/5m:
-    max_hold: 20
-    min_confidence: 2
-    sl_atr_mult: 3.0
-    tp_atr_mult: 4.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      ADX_TREND_THR: 33
-      EMA_FAST: 12
-      EMA_SLOW: 50
-      RSI_OS: 33
-      RSI_OB: 72
-      VOL_MIN: 0.6
-      ATR_SPIKE_THR: 1.8
-  N/3m:
-    max_hold: 30
-    min_confidence: 2
-    sl_atr_mult: 1.5
-    tp_atr_mult: 3.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      ADX_TREND_THR: 38
-      EMA_FAST: 25
-      EMA_SLOW: 60
-      RSI_OS: 28
-      RSI_OB: 68
-      VOL_MIN: 0.6
-      ATR_SPIKE_THR: 2.1
-  G/3m:
-    max_hold: 10
-    min_confidence: 2
-    sl_atr_mult: 0.8
-    tp_atr_mult: 4.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      CCI_OVERSOLD: -80
-      CCI_OVERBOUGHT: 118
-      WILLR_OVERSOLD: -80
-      WILLR_OB: -18
-      MFI_OVERSOLD: 40
-      MFI_OB: 75
-      VOL_RATIO_MIN: 0.4
-  G/1m:
-    max_hold: 30
-    min_confidence: 2
-    sl_atr_mult: 1.5
-    tp_atr_mult: 10.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      CCI_OVERSOLD: -100
-      CCI_OVERBOUGHT: 130
-      WILLR_OVERSOLD: -85
-      WILLR_OB: -25
-      MFI_OVERSOLD: 37
-      MFI_OB: 75
-      VOL_RATIO_MIN: 0.7
-  G/5m:
-    max_hold: 30
-    min_confidence: 2
-    sl_atr_mult: 0.8
-    tp_atr_mult: 4.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      CCI_OVERSOLD: -120
-      CCI_OVERBOUGHT: 80
-      WILLR_OVERSOLD: -75
-      WILLR_OB: -15
-      MFI_OVERSOLD: 35
-      MFI_OB: 70
-      VOL_RATIO_MIN: 0.5
-  M/15m:
-    max_hold: 30
-    min_confidence: 2
-    sl_atr_mult: 1.5
-    tp_atr_mult: 4.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      TREND_THR: 1.2
-      R2_MIN: 0.4
-      TREND_GATE: 0.7
-      VOL_RATIO_MIN: 0.6
-      MIN_PRIMARY: 2
-  M/5m:
-    max_hold: 30
-    min_confidence: 2
-    sl_atr_mult: 2.0
-    tp_atr_mult: 4.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      TREND_THR: 1.0
-      R2_MIN: 0.5
-      TREND_GATE: 0.7
-      VOL_RATIO_MIN: 0.6
-      MIN_PRIMARY: 2
-  M/3m:
-    max_hold: 30
-    min_confidence: 2
-    sl_atr_mult: 4.0
-    tp_atr_mult: 5.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      TREND_THR: 0.8
-      R2_MIN: 0.4
-      TREND_GATE: 0.3
-      VOL_RATIO_MIN: 0.8
-      MIN_PRIMARY: 2
-  M/1m:
-    max_hold: 30
-    min_confidence: 2
-    sl_atr_mult: 3.5
-    tp_atr_mult: 6.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-    params:
-      TREND_THR: 0.4
-      R2_MIN: 0.4
-      TREND_GATE: 0.3
-      VOL_RATIO_MIN: 0.7
-      MIN_PRIMARY: 2
-  G+/3m:
-    max_hold: 12
-    min_confidence: 1
-    sl_atr_mult: 1.0
-    tp_atr_mult: 3.5
-    trailing_offset: 0.5
-    trailing_step: 0.3
-  G+/5m:
-    max_hold: 12
-    min_confidence: 1
-    sl_atr_mult: 1.0
-    tp_atr_mult: 2.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-  A/15m:
-    max_hold: 10
-    min_confidence: 1
-    sl_atr_mult: 1.0
-    tp_atr_mult: 6.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-  A/5m:
-    max_hold: 30
-    min_confidence: 1
-    sl_atr_mult: 3.0
-    tp_atr_mult: 8.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-  F/3m:
-    max_hold: 10
-    min_confidence: 2
-    sl_atr_mult: 1.2
-    tp_atr_mult: 1.5
-    trailing_offset: 0.5
-    trailing_step: 0.3
-  V/3m:
-    max_hold: 20
-    min_confidence: 1
-    sl_atr_mult: 2.5
-    tp_atr_mult: 5.0
-    trailing_offset: 0.8
-    trailing_step: 0.4
-  V/5m:
-    max_hold: 20
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 2.5
-    trailing_offset: 0.8
-    trailing_step: 0.4
-  Y/5m:
-    max_hold: 30
-    min_confidence: 2
-    sl_atr_mult: 1.5
-    tp_atr_mult: 5.0
-    trailing_offset: 1.0
-    trailing_step: 0.5
-    daily_dir_loss_cap: 2
-  V2/5m:
-    max_hold: 20
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 5.0
-    trailing_offset: 0.6
-    trailing_step: 0.3
-  V2/3m:
-    max_hold: 20
-    min_confidence: 2
-    sl_atr_mult: 1.5
-    tp_atr_mult: 3.5
-    trailing_offset: 0.6
-    trailing_step: 0.3
-  W/5m:
-    max_hold: 12
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 4.0
-    trailing_offset: 0.6
-    trailing_step: 0.3
-  W/3m:
-    max_hold: 15
-    min_confidence: 1
-    sl_atr_mult: 1.2
-    tp_atr_mult: 4.0
-    trailing_offset: 0.6
-    trailing_step: 0.3
-  O/5m:
-    max_hold: 20
-    min_confidence: 1
-    sl_atr_mult: 1.8
-    tp_atr_mult: 2.5
-    trailing_offset: 0.8
-    trailing_step: 0.4
-  O/3m:
-    max_hold: 15
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 3.5
-    trailing_offset: 0.8
-    trailing_step: 0.4
-  D/5m:
-    max_hold: 15
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 2.5
-    trailing_offset: 0.6
-    trailing_step: 0.3
-  D/3m:
-    max_hold: 12
-    min_confidence: 1
-    sl_atr_mult: 1.2
-    tp_atr_mult: 3.0
-    trailing_offset: 0.6
-    trailing_step: 0.3
-  E/5m:
-    max_hold: 20
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 3.5
-    trailing_offset: 0.8
-    trailing_step: 0.4
-  E/3m:
-    max_hold: 15
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 3.0
-    trailing_offset: 0.8
-    trailing_step: 0.4
-  J/5m:
-    max_hold: 15
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 3.5
-    trailing_offset: 0.8
-    trailing_step: 0.4
-    entry_limit_offset: 0.5
-  J/3m:
-    max_hold: 12
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 3.0
-    trailing_offset: 0.8
-    trailing_step: 0.4
-  G+T/5m:
-    max_hold: 12
-    min_confidence: 1
-    sl_atr_mult: 1.0
-    tp_atr_mult: 5.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-  G+T/3m:
-    max_hold: 12
-    min_confidence: 1
-    sl_atr_mult: 1.0
-    tp_atr_mult: 5.0
-    trailing_offset: 0.5
-    trailing_step: 0.3
-  X/3m:
-    max_hold: 40
-    min_confidence: 1
-    sl_atr_mult: 1.5
-    tp_atr_mult: 5.0
-    trailing_offset: 1.5
-    trailing_step: 1.5
-  X/5m:
-    max_hold: 15
-    min_confidence: 1
-    sl_atr_mult: 2.0
-    tp_atr_mult: 3.0
-    trailing_offset: 1.0
-    trailing_step: 0.5
-    entry_limit_offset: 0.5
-combo_tf_map:
-  D:
-  - 5m
-  J:
-  - 5m
-  X:
-  - 5m
-  V:
-  - 5m
-  Y:
-  - 5m
-combos:
-  A_Trend_Pullback:
-    confirm:
-    - adx_di
-    - macd_cross
-    - macd_hist_rev
-    - obv_confirm
-    desc: 'Pullback trong trend: EMA Ribbon xếp hàng + giá hồi về EMA21. Gate bởi
-      MACD momentum + OBV xác nhận + TEMA.'
-    gate:
-    - macd_filter
-    - tema_guard
-    - volume_ratio_gate
-    name: 'A: Trend Pullback (~65% WR)'
-    primary:
-    - ema_ribbon
-    - ema_pullback
-  G_MeanReversion_Crypto:
-    confirm:
-    - stoch_cross
-    - bb_bounce
-    - rsi_div
-    - obv_confirm
-    desc: 'Đảo chiều mean-reversion: CCI+Williams%R+MFI cùng ở vùng cực. Xác nhận
-      bởi Stochastic cross + BB bounce + RSI phân kỳ.'
-    gate:
-    - volume_ratio_gate
-    name: 'G: Multi-Oscillator Reversal'
-    primary:
-    - cci_extreme
-    - williams_extreme
-    - mfi_confirm
-  M_TrendBreakout_Crypto:
-    confirm:
-    - adx_di
-    - ema_ribbon
-    - macd_cross
-    - obv_confirm
-    desc: 'Breakout xu hướng: Trend Composite + Supertrend + phá vỡ hỗ trợ/kháng cự.
-      KB squeeze đảm bảo trend đủ mạnh.'
-    gate:
-    - trend_strength_gate
-    - kb_squeeze
-    - volume_ratio_gate
-    name: 'M: Trend Breakout'
-    primary:
-    - trend_composite
-    - supertrend_flip
-    - sr_breakout
-  N_RegimeAdaptive_Crypto:
-    confirm:
-    - supertrend_flip
-    - obv_confirm
-    - macd_hist_rev
-    - adx_di
-    desc: 'Tự thích ứng xu hướng: ADX phân biệt trend/sideway. Trend→EMA cắt lên/xuống.
-      Sideway→RSI quá mua/bán + BB bounce. Xác nhận bởi Supertrend + OBV.'
-    gate:
-    - ema200_bias
-    name: 'N: Regime Adaptive'
-    primary:
-    - regime_ema_cross
-    - regime_range_bounce
-  Gplus_Enhanced:
-    confirm:
-    - stoch_cross
-    - bb_bounce
-    - rsi_div
-    - obv_confirm
-    - vol_price_divergence
-    desc: 'Bắt đảo chiều từ vùng cực: CCI+Williams%R+MFI đồng loạt báo quá bán/quá
-      mua. Lọc chất lượng bằng momentum ratio + tương quan volume-giá. SL nhỏ, TP
-      lớn (R:R 1:7.5).'
-    gate:
-    - volume_ratio_gate
-    - momentum_ratio_gate
-    - g_regime_gate
-    name: 'G+: Enhanced Multi-Oscillator'
-    primary:
-    - cci_extreme
-    - williams_extreme
-    - mfi_confirm
-  F_Supertrend:
-    confirm:
-    - adx_di
-    - ema_ribbon
-    - macd_cross
-    - obv_confirm
-    desc: 'Supertrend đổi hướng + ADX xác nhận trend mạnh + MACD momentum + volume
-      trên trung bình. Scalp ngắn: SL/TP nhỏ, hold tối đa 30 phút.'
-    gate:
-    - macd_filter
-    - volume_ratio_gate
-    - tema_guard
-    name: 'F: Supertrend Momentum'
-    primary:
-    - supertrend_flip
-  V_VWAP_Dip_Bounce:
-    confirm:
-    - cci_extreme
-    - williams_extreme
-    - bb_bounce
-    - adx_di
-    - obv_confirm
-    - mfi_confirm
-    - adx_trend_filter
-    desc: 'Bắt move lớn 5+pts: giá dưới/trên VWAP + kéo 3 nến + osc extreme. Session
-      gate tránh opening noise. TP=3.5xATR.'
-    gate:
-    - session_open_filter
-    name: 'V: VWAP Dip Bounce'
-    primary:
-    - vwap_side_bounce
-  V2_Bounce_Confirm:
-    confirm:
-    - adx_di
-    - obv_confirm
-    - adx_trend_filter
-    desc: 'V2: Chờ nến đảo chiều đầu tiên sau khi oscillator extreme + pullback. Fix
-      falling-knife của V. Entry trễ 1-2 nến nhưng WR cao hơn. TP=3.5xATR.'
-    gate:
-    - session_open_filter
-    name: 'V2: Bounce Confirm'
-    primary:
-    - bounce_confirm
-  X_Big_Move_Catcher:
-    confirm:
-    - supertrend_flip
-    - adx_di
-    - obv_confirm
-    - macd_hist_rev
-    - cci_extreme
-    - williams_extreme
-    desc: 'Data-driven (153 moves >=7pts, 120d): 59% preceded by STOP HUNT. Entry after
-      liquidity sweep (price breaks recent H/L then reverses) + pullback reversal.
-      88% have traps. Trap confirm gate ensures sweep + volume. SL tight, TP wide (R:R 3-4:1).'
-    gate:
-    - volume_ratio_gate
-    - trap_confirmation_gate
-    name: 'X: Big Move Catcher'
-    primary:
-    - liquidity_sweep
-    - pullback_reversal
-entry:
-  atr_pullback: 0.5
-  sl_atr_mult: 1.5
-  time_filter_end: '14:30'
-  time_filter_start: 09:00
-  tp_atr_mult: 4.0
-  trailing_sl: false
-entry_timeframe: 1m
-indicators:
-  cci_period: 14
-  donchian_period: 20
-  fast_ma: 10
-  ichimoku_kijun: 26
-  ichimoku_senkou: 52
-  ichimoku_tenkan: 9
-  macd_fast: 12
-  macd_signal: 9
-  macd_slow: 26
-  overbought: 70
-  oversold: 35
-  rsi_period: 7
-  slow_ma: 20
-  supertrend_mult: 3.0
-  supertrend_period: 7
-  vol_mult: 1.5
-  williams_r_period: 14
-market_close: '14:30'
+active_combo: CB
+symbol: VN30F1M
 market_open: 09:00
-patterns:
-  engulfing: true
-  evening_star: true
-  head_and_shoulders: true
-  morning_star: true
-  volume_confirm: true
-scan_interval: 35
+market_close: '14:30'
+scan_interval: 10
+
+# CB: Compression Breakout (3-bar squeeze < 0.7xATR)
+# Validated: 129d walk-forward, WR 67.7%, PF 4.87, +6.34 pts/day (with adaptive exit)
+# Cost: 0.96 pts/trade (slippage 0.5 + commission 0.46)
+
+# ── Single source of truth for all session/exit params ──────────────────────
+session_params:
+  AM:
+    sl_atr_mult: 1.2
+    trail_activate_pts: 5.0
+    trail_atr_mult: 2.0
+    max_hold_bars: 24
+  PM:
+    sl_atr_mult: 1.0
+    trail_activate_pts: 4.0
+    trail_atr_mult: 1.5
+    max_hold_bars: 12
+
+combo_risk:
+  CB:
+    sl_atr_mult: 1.5
+    tp_atr_mult: 4.0
+    dedup_bars: 5
+
+# Session-aware params (hardcoded in portfolio_manager.py CB_SESSION_PARAMS):
+# AM: SL=1.2xATR, trail@5pts/2.0xATR, max_hold=24 bars
+# PM: SL=1.0xATR, trail@4pts/1.5xATR, max_hold=12 bars
+
+adaptive_exit:
+  enabled: true
+  session: AM
+  pre_move_ratio_threshold: 0.8
+  exit_target_pts: 4.0
+  # Validated: AM pre_move/ATR > 0.8 → exit@4pts adds +0.29/d
+
+combo_tf_map:
+  CB:
+  - 5m
+
+entry:
+  time_filter_start: 09:00
+  time_filter_end: '14:30'
+  entry_filter:
+    atr_max: 4.5
+    atr_min: 2.5
+    rsi_period: 14
+    rsi_min: 0
+    rsi_max: 70
+  exit_management:
+    be_trigger_pts: 4.0
+    be_atr_min: 3.5
+    trail_tighten_pts: 8.0
+    trail_tighten_mult: 1.2
+    tighten_atr_min: 3.5
+  compression:
+    n_bars: 3
+    threshold: 0.7
+  time_windows:
+    am_start: '09:15'
+    am_end: '10:45'
+    pm_start: '13:15'
+    pm_end: '14:15'
+
 signal_timeframes:
-- 1m
-- 3m
 - 5m
 - 15m
-symbol: VN30F1M
+
 dead_zones:
   enabled: false
-  skip_windows:
-  - start: 09:00
-    end: 09:30
-    reason: 'Worst window: -170pts, WR 32.5%, PF 0.56 (80T)'
-  - start: '11:00'
-    end: '11:30'
-    reason: 'Bad: -100pts, WR 31.8%, PF 0.37 (44T)'
-  - start: '14:00'
-    end: '14:30'
-    reason: 'Bad: -86pts, WR 25.6%, PF 0.62 (82T)'
-  high_confidence_windows:
-  - start: 09:30
-    end: '10:00'
-    min_confidence: 3
-    reason: Vol thap, trap rate cao
-  cooldown_after_sl_minutes: 0

@@ -9,6 +9,10 @@ class Config:
     DNSE_API_KEY = os.getenv("DNSE_API_KEY", "")
     DNSE_API_SECRET = os.getenv("DNSE_API_SECRET", "")
 
+    # DNSE OTP (Gmail IMAP for auto-auth)
+    DNSE_OTP_EMAIL = os.getenv("DNSE_OTP_EMAIL", "")
+    DNSE_OTP_APP_PASSWORD = os.getenv("DNSE_OTP_APP_PASSWORD", "")
+
     # Telegram
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")

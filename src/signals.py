@@ -307,10 +307,10 @@ COMBO_PRESETS = {
         "gate": ["macd_filter", "volume_ratio_gate"],
     },
     "C: Mean Reversion (~60% WR)": {
-        "desc": "Price touches BB + Stoch extreme + MFI oversold. BB percent filter ensures entry in zone.",
+        "desc": "Price touches BB + Stoch extreme + MFI oversold. EMA200 bias gate prevents counter-trend reversals.",
         "primary": ["bb_bounce", "stoch_cross", "mfi_confirm"],
         "confirm": ["rsi_div", "hammer_star", "engulfing"],
-        "gate": ["bb_percent_filter", "ranging_filter"],
+        "gate": ["bb_percent_filter", "ranging_filter", "ema200_bias_gate"],
     },
     "K: Smart Mean Reversion": {
         "desc": "Base from C + MACD gate + TEMA guard for timing precision.",
@@ -325,10 +325,10 @@ COMBO_PRESETS = {
         "gate": ["macd_filter", "volume_ratio_gate", "tema_guard"],
     },
     "G: Multi-Oscillator Reversal": {
-        "desc": "CCI + Williams %R both extreme + MFI confirmation. Volume ratio gate.",
-        "primary": ["cci_extreme", "williams_extreme", "mfi_confirm"],
-        "confirm": ["stoch_cross", "bb_bounce", "rsi_div", "obv_confirm"],
-        "gate": ["volume_ratio_gate"],
+        "desc": "Williams %R extreme + Stoch cross + MFI. ADX trend filter ensures trend before reversal entry.",
+        "primary": ["williams_extreme", "stoch_cross"],
+        "confirm": ["cci_extreme", "mfi_confirm", "bb_bounce", "rsi_div", "obv_confirm"],
+        "gate": ["volume_ratio_gate", "ema200_bias_gate"],
     },
     "H: Alpha Momentum": {
         "desc": "Midpoint momentum + Vol-price divergence + OBV. Momentum ratio gate.",
@@ -772,15 +772,18 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
     # ALL computed upfront (supports 30s refresh without re-selecting conditions)
 
     # --- Moving Averages ---
-    df["sma_f"] = ta.sma(df["close"], length=fast_ma)
-    df["sma_s"] = ta.sma(df["close"], length=slow_ma)
-    df["ema3"]  = ta.ema(df["close"], length=3)   # Ultra-fast (1m scalp)
-    df["ema5"]  = ta.ema(df["close"], length=5)
-    df["ema8"]  = ta.ema(df["close"], length=8)
-    df["ema12"] = ta.ema(df["close"], length=12)
-    df["ema21"] = ta.ema(df["close"], length=21)
-    df["ema55"] = ta.ema(df["close"], length=55)
-    df["ema200"] = ta.ema(df["close"], length=200)
+    _close = df["close"]
+    def _ta_or(result, fallback):
+        return result if result is not None else fallback
+    df["sma_f"] = _ta_or(ta.sma(_close, length=fast_ma), _close)
+    df["sma_s"] = _ta_or(ta.sma(_close, length=slow_ma), _close)
+    df["ema3"]  = _ta_or(ta.ema(_close, length=3),   _close)
+    df["ema5"]  = _ta_or(ta.ema(_close, length=5),   _close)
+    df["ema8"]  = _ta_or(ta.ema(_close, length=8),   _close)
+    df["ema12"] = _ta_or(ta.ema(_close, length=12),  _close)
+    df["ema21"] = _ta_or(ta.ema(_close, length=21),  _close)
+    df["ema55"] = _ta_or(ta.ema(_close, length=55),  _close)
+    df["ema200"]= _ta_or(ta.ema(_close, length=200), _close)
 
     # --- Open Range Breakout (ORB, 1m scalp) ---
     # ORB = high/low of first 15 bars of morning session (09:00-09:14 VN time)
@@ -845,7 +848,8 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
     df["ema12_slope_raw"] = df["ema12"] - df["ema12"].shift(3)
 
     # --- RSI ---
-    df["rsi"] = ta.rsi(df["close"], length=rsi_period)
+    _rsi = ta.rsi(df["close"], length=rsi_period)
+    df["rsi"] = _rsi if _rsi is not None else 50.0
 
     # --- MACD ---
     macd_result = ta.macd(df["close"], fast=macd_fast, slow=macd_slow, signal=macd_signal)
@@ -878,27 +882,35 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
     df["bb_percent"] = (df["close"] - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"]).replace(0, np.nan)
 
     # --- Stochastic ---
-    stoch = ta.stoch(df["high"], df["low"], df["close"], k=stoch_k, d=stoch_d)
-    if stoch is not None:
-        df["stoch_k"] = stoch.iloc[:, 0]
-        df["stoch_d"] = stoch.iloc[:, 1]
-    else:
+    try:
+        stoch = ta.stoch(df["high"], df["low"], df["close"], k=stoch_k, d=stoch_d)
+        if stoch is not None:
+            df["stoch_k"] = stoch.iloc[:, 0]
+            df["stoch_d"] = stoch.iloc[:, 1]
+        else:
+            df["stoch_k"] = 50
+            df["stoch_d"] = 50
+    except Exception:
         df["stoch_k"] = 50
         df["stoch_d"] = 50
 
     # --- TEMA (Triple Exponential Moving Average, period 9) ---
     # More responsive than EMA, less lag -> better entry timing
-    df["tema9"] = ta.tema(df["close"], length=9)
+    _tema9 = ta.tema(df["close"], length=9)
+    df["tema9"] = _tema9 if _tema9 is not None else df["ema12"]
     df["tema_rising"] = df["tema9"] > df["tema9"].shift(1)
     df["tema_falling"] = df["tema9"] < df["tema9"].shift(1)
 
     # --- Volume ---
-    df["vol_sma"] = ta.sma(df["volume"].astype(float), length=20)
+    _vol_float = df["volume"].astype(float)
+    _vol_sma = ta.sma(_vol_float, length=20)
+    df["vol_sma"] = _vol_sma if _vol_sma is not None else _vol_float
     df["vol_ok"] = df["volume"] > (vol_mult * df["vol_sma"])
 
     # --- Volume Ratio (continuous, from TrendRider) ---
     # vol_ratio > 1.0 = above average, > 1.5 = strong volume surge
-    df["vol_ema20"] = ta.ema(df["volume"].astype(float), length=20)
+    _vol_ema20 = ta.ema(_vol_float, length=20)
+    df["vol_ema20"] = _vol_ema20 if _vol_ema20 is not None else _vol_float
     df["volume_ratio"] = df["volume"].astype(float) / (df["vol_ema20"] + 1e-10)
 
     # --- MFI (Money Flow Index, 14-period) ---
@@ -916,7 +928,8 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
         df["obv"] = obv_result if obv_result is not None else 0.0
     except Exception:
         df["obv"] = 0.0
-    df["obv_ema"] = ta.ema(df["obv"], length=20)
+    obv_ema_result = ta.ema(df["obv"], length=20)
+    df["obv_ema"] = obv_ema_result if obv_ema_result is not None else df["obv"]
     df["obv_rising"] = df["obv"] > df["obv_ema"]
 
     # --- ATR (14-day, Investopedia standard) ---
@@ -1074,6 +1087,8 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
     # --- Keltner Channels (for KB Squeeze detection) ---
     # Keltner = EMA(20) +/- 1.5 * ATR(10)
     _kc_ema = ta.ema(df["close"], length=20)
+    if _kc_ema is None:
+        _kc_ema = df["ema21"]
     _kc_atr = ta.atr(df["high"], df["low"], df["close"], length=10)
     if _kc_atr is None:
         _kc_atr = df["atr"]
@@ -1630,8 +1645,8 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
             _times = None
 
         if _times is not None:
-            _h = _times.hour
-            _m = _times.minute
+            _h = _times.dt.hour if hasattr(_times, 'dt') else _times.hour
+            _m = _times.dt.minute if hasattr(_times, 'dt') else _times.minute
             _session_settled = ~(
                 ((_h == 9) & (_m < 5)) |
                 ((_h == 13) & (_m < 10))
@@ -1899,7 +1914,11 @@ def generate_combined_signals(data: pd.DataFrame, fast_ma=10, slow_ma=20,
     if enabled.get("regime_ema_cross", False):
         _adx_trend = df["adx"] > 20
         _ema13 = ta.ema(df["close"], length=13)
+        if _ema13 is None:
+            _ema13 = df["ema12"]
         _ema34 = ta.ema(df["close"], length=34)
+        if _ema34 is None:
+            _ema34 = df["ema21"]
         _cross_up = (_ema13 > _ema34) & (_ema13.shift(1) <= _ema34.shift(1))
         _cross_dn = (_ema13 < _ema34) & (_ema13.shift(1) >= _ema34.shift(1))
         # Allow cross within 2 bars (momentum still valid)
