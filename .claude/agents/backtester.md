@@ -117,9 +117,21 @@ A new strategy/modification is BETTER if:
 
 ## Script Naming Convention
 
-- `bt_<what>.py` — backtest comparison (parameter sweep, multi-config)
-- `research_<what>.py` — exploratory analysis (measure a phenomenon)
-- `debug_<tf>.py` — deep dive into specific TF with trade-by-trade detail
+- `backtest/engine.py` — main CB backtest (trail sweep, multi-TF)
+- `backtest/<name>.py` — additional backtest scripts
+- `research/<what>.py` — exploratory analysis (measure a phenomenon)
+
+## Combo Interface
+
+New strategies use the OOP combo pattern:
+```python
+from combos import get_combo
+combo = get_combo("CB")
+signal = combo.detect(df_5m)  # returns dict or None
+params = combo.get_session_params("AM")  # SL/TP/trail params
+```
+
+To add a new combo: create `combos/<name>.py` inheriting `combos.base.BaseCombo`.
 
 ## Common Tasks
 

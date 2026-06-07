@@ -5,70 +5,90 @@ market_close: '14:30'
 scan_interval: 10
 
 # CB: Compression Breakout (3-bar squeeze < 0.7xATR)
-# Validated: 129d walk-forward, WR 67.7%, PF 4.87, +6.34 pts/day (with adaptive exit)
+# Validated: 130d, WR 74.7%, PF 5.13, +6.69 pts/day (optimized exit 2026-06-06)
+# Improvements: excl weak AM slots, PM ATR 2.0-5.0, optimized trail/SL/BE
 # Cost: 0.96 pts/trade (slippage 0.5 + commission 0.46)
 
-# ── Single source of truth for all session/exit params ──────────────────────
+# ── Per-combo detection params (single source of truth) ───────────────────────
+combos:
+  CB:
+    timeframe: 5m
+    compression:
+      n_bars: 3
+      threshold: 0.7
+    entry_filter:
+      atr_min: 2.5
+      atr_max: 4.5
+      atr_min_pm: 2.0
+      atr_max_pm: 5.0
+      rsi_period: 14
+      rsi_max: 70
+    time_windows:
+      am_start: '09:15'
+      am_end: '10:45'
+      pm_start: '13:15'
+      pm_end: '14:15'
+    dead_zones:
+      - '09:45-10:00'
+      - '10:15-10:30'
+    dedup_bars: 5
+    tp_atr_mult: 4.0
+
+  NR4:
+    timeframe: 5m
+    direction: SHORT
+    nr4_lookback: 4
+    compression_threshold: 0.7
+    entry_filter:
+      atr_min: 2.5
+      atr_max: 4.5
+    time_windows:
+      am_start: '09:15'
+      am_end: '10:45'
+      pm_start: '13:15'
+      pm_end: '14:15'
+    dedup_bars: 5
+    tp_atr_mult: 4.0
+
+# ── Shared exit params (all combos use same session-aware exit) ────────────────
 session_params:
   AM:
-    sl_atr_mult: 1.2
-    trail_activate_pts: 5.0
-    trail_atr_mult: 2.0
-    max_hold_bars: 24
-  PM:
-    sl_atr_mult: 1.0
-    trail_activate_pts: 4.0
-    trail_atr_mult: 1.5
-    max_hold_bars: 12
-
-combo_risk:
-  CB:
     sl_atr_mult: 1.5
-    tp_atr_mult: 4.0
-    dedup_bars: 5
-
-# Session-aware params (hardcoded in portfolio_manager.py CB_SESSION_PARAMS):
-# AM: SL=1.2xATR, trail@5pts/2.0xATR, max_hold=24 bars
-# PM: SL=1.0xATR, trail@4pts/1.5xATR, max_hold=12 bars
+    trail_activate_pts: 7.0
+    trail_atr_mult: 2.5
+    max_hold_bars: 30
+    be_trigger_pts: 3.0
+    be_atr_min: 3.5
+    be_partial_pts: 1.0
+  PM:
+    sl_atr_mult: 1.2
+    trail_activate_pts: 6.0
+    trail_atr_mult: 1.0
+    max_hold_bars: 8
+    be_trigger_pts: 3.0
+    be_atr_min: 3.5
+    be_partial_pts: 1.0
 
 adaptive_exit:
   enabled: true
   session: AM
   pre_move_ratio_threshold: 0.8
-  exit_target_pts: 4.0
-  # Validated: AM pre_move/ATR > 0.8 → exit@4pts adds +0.29/d
+  mfe_trigger_pts: 2.0
+  exit_target_pts: 3.2
 
+# ── ML Filter (meta-labeling) ─────────────────────────────────────────────────
+ml_filter:
+  enabled: false
+  shadow_mode: true
+  threshold: 0.45
+  model_path: ml/models/meta_label_latest.pkl
+  retrain_days: 30
+  kill_switch_days: 10
+
+# ── Scanner-level params ──────────────────────────────────────────────────────
 combo_tf_map:
   CB:
   - 5m
-
-entry:
-  time_filter_start: 09:00
-  time_filter_end: '14:30'
-  entry_filter:
-    atr_max: 4.5
-    atr_min: 2.5
-    rsi_period: 14
-    rsi_min: 0
-    rsi_max: 70
-  exit_management:
-    be_trigger_pts: 4.0
-    be_atr_min: 3.5
-    trail_tighten_pts: 8.0
-    trail_tighten_mult: 1.2
-    tighten_atr_min: 3.5
-  compression:
-    n_bars: 3
-    threshold: 0.7
-  time_windows:
-    am_start: '09:15'
-    am_end: '10:45'
-    pm_start: '13:15'
-    pm_end: '14:15'
-
-signal_timeframes:
-- 5m
-- 15m
-
-dead_zones:
-  enabled: false
+  NR4:
+  - 5m
+  - 3m

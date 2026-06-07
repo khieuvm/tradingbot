@@ -110,17 +110,18 @@ Monthly re-validation → if still F → permanent disable
 
 ### Steps
 1. Quantify the problem precisely (e.g. "48/223 trades reverse at 4–6 pts MFE")
-2. Write a focused research script (e.g. `research_mfe46.py`)
+2. Write a focused research script in `research/` folder
 3. Identify the features that correlate with the problem
-4. Write adaptive logic script (e.g. `research_adaptive_exit.py`)
-5. Test on all relevant TFs with multi-threshold sweep (e.g. `bt_adaptive_3tf.py`)
+4. Write adaptive logic, test with `backtest/engine.py`
+5. If new combo: implement in `combos/<name>.py` inheriting `BaseCombo`
 6. Update `proven_edges.md` with findings (positive AND negative)
 7. Update `anti_patterns.md` if finding is a confirmed dead end
 
-### Research Scripts Convention
-- `research_*.py` — exploratory: measure a specific phenomenon
-- `bt_*.py` — backtest: test parameters, configurations, multi-TF
-- `debug_*.py` — deep dive: individual TF analysis with trade detail
+### Scripts Convention
+- `research/<topic>.py` — exploratory: measure a specific phenomenon
+- `backtest/engine.py` — main CB backtest (trail sweep)
+- `backtest/<name>.py` — additional backtest scripts
+- `combos/<name>.py` — new combo implementations (inherit BaseCombo)
 
 ### Validation threshold for deploying a new rule
 - Must improve P/D on the primary TF (5m, 129+ days)

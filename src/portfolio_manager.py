@@ -18,17 +18,18 @@ from pathlib import Path
 
 from src.notifier import TelegramNotifier
 from src.trade_logger import TradeLogger
+from src.strategy_config import get_config, get_session_params, get_combo_config
 
 VN_TZ = timezone(timedelta(hours=7))
 POINT_VALUE = 100_000
 COMMISSION = 0.47  # pts per side (0.46 actual, rounded up)
 
-CONFIG_PATH = Path(__file__).parent.parent / "strategy_config.yaml"
-
-# Fallback defaults — overridden by strategy_config.yaml session_params + adaptive_exit
+# Fallback defaults — overridden by strategy_config.yaml session_params
 _DEFAULT_SESSION_PARAMS = {
-    "AM": {"sl_atr_mult": 1.2, "trail_activate_pts": 5.0, "trail_atr_mult": 2.0, "max_hold_bars": 24},
-    "PM": {"sl_atr_mult": 1.0, "trail_activate_pts": 4.0, "trail_atr_mult": 1.5, "max_hold_bars": 12},
+    "AM": {"sl_atr_mult": 1.5, "trail_activate_pts": 7.0, "trail_atr_mult": 2.5, "max_hold_bars": 30,
+            "be_trigger_pts": 3.0, "be_atr_min": 3.5, "be_partial_pts": 1.0},
+    "PM": {"sl_atr_mult": 1.2, "trail_activate_pts": 6.0, "trail_atr_mult": 1.0, "max_hold_bars": 8,
+            "be_trigger_pts": 3.0, "be_atr_min": 3.5, "be_partial_pts": 1.0},
 }
 
 
@@ -55,11 +56,7 @@ class PortfolioManager:
 
     def _load_config(self):
         """Load session params, adaptive exit, and combo risk from strategy_config.yaml."""
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
-        except Exception:
-            cfg = {}
+        cfg = get_config()
 
         # Session-specific trailing/SL params
         sp = cfg.get("session_params", {})
@@ -72,17 +69,13 @@ class PortfolioManager:
         self.adaptive_exit_enabled = ae.get("enabled", True)
         self.adaptive_exit_session = ae.get("session", "AM")
         self.adaptive_exit_ratio = ae.get("pre_move_ratio_threshold", 0.8)
-        self.adaptive_exit_pts = ae.get("exit_target_pts", 4.0)
+        self.adaptive_exit_mfe = ae.get("mfe_trigger_pts", 2.0)
+        self.adaptive_exit_pts = ae.get("exit_target_pts", 3.2)
 
-        # Per-combo SL/TP risk
-        self.combo_risk = cfg.get("combo_risk", {})
-
-    def get_risk(self, combo: str) -> tuple[float, float]:
-        """Get SL/TP multipliers for a combo."""
-        risk = self.combo_risk.get(combo, {})
-        sl = risk.get("sl_atr_mult", 1.5)
-        tp = risk.get("tp_atr_mult", 4.0)
-        return sl, tp
+    def get_tp_mult(self, combo: str) -> float:
+        """Get TP multiplier for a combo."""
+        combo_cfg = get_combo_config(combo)
+        return combo_cfg.get("tp_atr_mult", 4.0)
 
     @property
     def is_flat(self) -> bool:
@@ -199,7 +192,7 @@ class PortfolioManager:
         session_params = self.session_params[session]
 
         sl_mult = session_params["sl_atr_mult"]
-        _, tp_mult = self.get_risk(combo)
+        tp_mult = self.get_tp_mult(combo)
         sl = entry_price - direction * sl_mult * atr
         tp = entry_price + direction * tp_mult * atr
         now = datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -288,12 +281,12 @@ class PortfolioManager:
             # Track max favorable excursion
             pos["mfe"] = max(pos.get("mfe", 0), mfe)
 
-            # --- Adaptive exit: AM + pre_move_ratio > threshold → exit@4pts ---
+            # --- Adaptive exit: AM + pre_move_ratio > threshold → exit early ---
             if (session == self.adaptive_exit_session
                     and pre_move_ratio > self.adaptive_exit_ratio
-                    and pos["mfe"] >= self.adaptive_exit_pts and not pos.get("adapt_exited")):
+                    and pos["mfe"] >= self.adaptive_exit_mfe and not pos.get("adapt_exited")):
                 pnl = direction * (close - entry) - 2 * COMMISSION
-                if pnl_pts >= self.adaptive_exit_pts * 0.8:
+                if pnl_pts >= self.adaptive_exit_pts:
                     self._close_one(i, close, "ADAPT_EXIT", pnl, now)
                     to_remove.append(i)
                     continue
@@ -338,12 +331,15 @@ class PortfolioManager:
                 to_remove.append(i)
                 continue
 
-            # --- Breakeven at +4pts when entry ATR >= 3.5 (matches backtest) ---
+            # --- Breakeven when MFE >= be_trigger and entry ATR >= be_atr_min ---
             trail_activate = session_params["trail_activate_pts"]
             trail_atr_mult = session_params["trail_atr_mult"]
-            if not pos.get("be_done") and entry_atr >= 3.5 and pos["mfe"] >= 4.0:
+            be_trigger = session_params.get("be_trigger_pts", 3.0)
+            be_atr_min = session_params.get("be_atr_min", 3.5)
+            be_partial = session_params.get("be_partial_pts", 1.0)
+            if not pos.get("be_done") and entry_atr >= be_atr_min and pos["mfe"] >= be_trigger:
                 pos["be_done"] = True
-                new_sl = entry
+                new_sl = entry + direction * be_partial
                 if direction == 1 and new_sl > pos["sl"]:
                     pos["sl"] = new_sl
                 elif direction == -1 and new_sl < pos["sl"]:
@@ -363,8 +359,8 @@ class PortfolioManager:
             # best_price = entry + direction * mfe (running max high / min low)
             if pos["mfe"] >= trail_activate and entry_atr > 0:
                 best_price = entry + direction * pos["mfe"]
-                # Tighten at +8pts when entry ATR >= 3.5
-                if entry_atr >= 3.5 and pos["mfe"] >= 8.0:
+                # Tighten at +8pts when entry ATR >= be_atr_min
+                if entry_atr >= be_atr_min and pos["mfe"] >= 8.0:
                     trail_dist = 1.2 * entry_atr
                 else:
                     trail_dist = trail_atr_mult * entry_atr

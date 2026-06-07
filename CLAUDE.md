@@ -56,6 +56,9 @@ python scanner.py --once --no-trade
 
 ```
 scanner.py               — Main loop: 10s position update + 60s CB scan
+combos/base.py           — Abstract base class for all combo strategies
+combos/cb.py             — CB Compression Breakout detection (OOP)
+combos/__init__.py       — Combo registry (get_combo by name)
 src/portfolio_manager.py — Session-aware position mgmt, adaptive exit, ATR trailing
 src/position_manager.py  — Legacy single-position manager (kept for compatibility)
 src/dnse_auth.py         — Auto OTP via Gmail IMAP → DNSE trading token
@@ -63,15 +66,16 @@ src/dnse_executor.py     — Real order placement via DNSE API (symbol: 41I1G600
 src/data_fetcher.py      — OHLCV data from vnstock/KBS
 src/notifier.py          — Telegram notifications (entry/exit/EOD/errors)
 src/trade_logger.py      — Daily JSONL trade logs + summary generation
+backtest/engine.py       — CB backtest engine (trail sweep, simulation)
+research/                — Analysis tools (placeholder)
 config.py                — Environment variable loader
 strategy_config.yaml     — Session params, adaptive exit, combo_tf_map (CB: [5m])
-bt_trail_sweep.py        — Backtest reference for CB strategy (do not modify)
 ```
 
 ### Data Flow
 
 ```
-vnstock/KBS API → data_fetcher.py → scanner.py → detect_cb_compression() (5m)
+vnstock/KBS API → data_fetcher.py → scanner.py → combo.detect(df_5m)
                                         ↓
                               portfolio_manager.py (manage positions)
                                         ↓
@@ -182,3 +186,68 @@ Rate limit exceeded → HTTP 429. Bot retries next cycle.
 | Position not closing at session end | Check SESSION exit in `portfolio_manager.update_prices()` |
 | `vnstock` symbol error | VN30F1M auto-converts to 41I1G6000 (KRX format) internally |
 | Positions surviving past 11:30 | SESSION exit at 11:25 should catch this; session-change exit at 13:00 as safety net |
+
+## ML Module (Meta-Labeling Signal Filter)
+
+### Status: INFRASTRUCTURE COMPLETE — Chờ Validation
+
+ML module đã build xong, **chưa bật live** vì OOS validation chưa đủ mạnh.
+
+### Kiến trúc
+
+```
+ml/
+  features.py           — 25 features tính từ 5m OHLCV tại signal bar
+  labeler.py            — Chạy backtest → extract features + label (win/loss)
+  train_meta_label.py   — Train LightGBM + purged walk-forward CV
+  model.py              — MLFilter class cho scanner integration
+  config.py             — Default ML params
+  data/cb_trades_labeled.csv   — 222 trades labeled (180d backtest)
+  models/meta_label_latest.pkl — Trained model
+  reports/validation_report.json
+```
+
+### Cách chạy
+
+```bash
+# 1. Generate dataset (chạy lại khi có thêm data)
+python -m ml.labeler
+
+# 2. Train + validate
+python -m ml.train_meta_label
+
+# 3. Shadow mode (log predictions, KHÔNG veto)
+python scanner.py --ml-shadow --no-trade
+```
+
+### Kết quả validation hiện tại (2026-06-08)
+
+- Dataset: 222 trades, WR 75.2%, 128 ngày
+- OOS Fold: 1 fold duy nhất (165 train / 41 test)
+- **ML chưa thêm giá trị** — tất cả thresholds cho Net PnL < baseline
+- Lý do: CB WR quá cao (75%), chỉ 55 losers → ML khó phân biệt
+- Top features: atr_14, ret_13, vol_ratio, range_pct, adx, compression_depth
+
+### TODO — Công Việc Tiếp Theo
+
+1. **[ĐANG CHỜ] Shadow mode 10-15 ngày** — chạy `scanner.py --ml-shadow` song song live, thu thập predictions
+2. **[ĐANG CHỜ] Thêm data** — cần 300+ trades (thêm 2-3 tháng) để có 2+ OOS folds đáng tin
+3. **[CẦN LÀM] Thử LOOCV** — Nếu muốn validate nhanh hơn, sửa `train_meta_label.py` để chạy purged LOOCV trên toàn bộ 222 trades (code đã có, chỉ cần force call)
+4. **[CẦN LÀM] Thêm features từ data mới** — orderbook imbalance, foreign flow, basis (nếu có API)
+5. **[PHASE 2] Exit optimization** — ML predict optimal trail/BE per-trade (sau khi Phase 1 validated)
+6. **[PHASE 3] Standalone ML signals trên 1m** — Chờ 120+ ngày 1m data (~32,400 bars)
+
+### Quyết Định Đã Chốt
+
+- ML **augment** CB, KHÔNG replace
+- Shadow mode **bắt buộc** trước khi go live
+- Kill switch: auto-disable nếu ML-filtered PnL < unfiltered 10 ngày liên tục
+- Retrain monthly khi có đủ data mới
+
+### Dependencies Bổ Sung (cho ML)
+
+```bash
+pip install lightgbm scikit-learn
+```
+
+Nếu không install LightGBM, code tự fallback sang ExtraTreesClassifier (sklearn built-in).

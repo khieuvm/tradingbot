@@ -135,9 +135,7 @@ Verdict: Deploy. Apply adaptive exit rule to live sim_day.py.
 
 ## Resources
 
-- `bt_robust.py` — Walk-forward engine (5m)
+- `bt_trail_sweep.py` — CB trail activation parameter sweep (primary backtest reference)
 - `bt_adaptive_3tf.py` — Adaptive exit backtest on 1m/3m/5m
-- `bt_trail_sweep.py` — Trail activation parameter sweep
 - `debug_3m.py` / `debug_1m.py` — TF-specific deep analysis
-- `strategy_config.yaml` — Current combo grades
-- `references/proven_edges.md` — Validated benchmarks
+- `strategy_config.yaml` — CB risk params and config

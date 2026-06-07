@@ -1,0 +1,12 @@
+{
+  "trained_at": "2026-06-08T00:22:27.969685",
+  "n_samples": 222,
+  "baseline_wr": 73.17073170731707,
+  "best_threshold": 0.3,
+  "retained_wr": 71.7948717948718,
+  "retention_rate": 95.1219512195122,
+  "baseline_pnl": 95.7843113737764,
+  "net_pnl": 87.30431137377636,
+  "pnl_improvement": -8.480000000000047,
+  "n_folds": "walk-forward"
+}

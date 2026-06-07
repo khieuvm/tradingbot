@@ -23,11 +23,11 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import pandas as pd
-import yaml
 
 warnings.filterwarnings("ignore", message="DataFrame is highly fragmented", category=pd.errors.PerformanceWarning)
 warnings.filterwarnings("ignore", message="Downcasting object dtype arrays", category=FutureWarning)
 
+from combos import get_combo
 from config import Config
 from src.data_fetcher import DataFetcher
 from src.notifier import TelegramNotifier
@@ -36,58 +36,21 @@ from src.position_manager import PositionManager
 from src.trade_logger import TradeLogger
 from src.dnse_auth import create_authenticated_client
 from src.dnse_executor import DnseExecutor
+from ml.model import MLFilter
 
 # --- CONFIG ---------------------------------------------------------------
-CONFIG_PATH = Path(__file__).parent / "strategy_config.yaml"
+from src.strategy_config import get_config, get_combo_config, get_session_params
 
+_cfg = get_config()
+SYMBOL = _cfg.get("symbol", "VN30F1M")
+SCAN_INTERVAL = _cfg.get("scan_interval", 10)
 
-def load_strategy_config() -> dict:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+_open_str = _cfg.get("market_open", "09:00")
+_close_str = _cfg.get("market_close", "14:30")
+MARKET_OPEN = tuple(int(x) for x in _open_str.split(":"))
+MARKET_CLOSE = tuple(int(x) for x in str(_close_str).split(":"))
 
-
-def apply_config(cfg: dict):
-    global SYMBOL, SCAN_INTERVAL, MARKET_OPEN, MARKET_CLOSE
-    global ENTRY_FILTER, COMBO_TF_MAP, COMBO_RISK
-
-    SYMBOL = cfg.get("symbol", "VN30F1M")
-    SCAN_INTERVAL = cfg.get("scan_interval", 10)
-
-    open_str = cfg.get("market_open", "09:00")
-    close_str = cfg.get("market_close", "14:30")
-    MARKET_OPEN = tuple(int(x) for x in open_str.split(":"))
-    MARKET_CLOSE = tuple(int(x) for x in close_str.split(":"))
-
-    entry = cfg.get("entry", {})
-    ef = entry.get("entry_filter", {})
-    ENTRY_FILTER = {
-        "atr_min": ef.get("atr_min", 2.5),
-        "atr_max": ef.get("atr_max", 4.5),
-        "rsi_period": ef.get("rsi_period", 14),
-        "rsi_max": ef.get("rsi_max", 70),
-    }
-
-    tf_map = cfg.get("combo_tf_map", {})
-    if tf_map:
-        COMBO_TF_MAP.clear()
-        COMBO_TF_MAP.update(tf_map)
-
-    COMBO_RISK = cfg.get("combo_risk", {})
-
-
-# Defaults (overridden by YAML)
-SYMBOL = "VN30F1M"
-SCAN_INTERVAL = 10
-MARKET_OPEN = (9, 0)
-MARKET_CLOSE = (14, 30)
-ENTRY_FILTER = {"atr_min": 2.5, "atr_max": 4.5, "rsi_period": 14, "rsi_max": 70}
-COMBO_TF_MAP = {}
-COMBO_RISK = {}
 DAILY_DIR_LOSSES: dict = {}
-
-if CONFIG_PATH.exists():
-    _cfg = load_strategy_config()
-    apply_config(_cfg)
 
 VN_TZ = timezone(timedelta(hours=7))
 
@@ -202,87 +165,63 @@ def detect_regime(df_15m: pd.DataFrame | None) -> dict:
         return default
 
 
-# ─── CB Compression Detection ─────────────────────────────────────────────────
+# ─── CB Combo Instance ────────────────────────────────────────────────────────
 
+_cb_combo = get_combo("CB")
 _cb_last_signal_time: datetime | None = None
-CB_DEDUP_SECONDS = 25 * 60  # 5 bars × 5 min = 25-min dedup (matches backtest)
+CB_DEDUP_SECONDS = _cb_combo.dedup_bars * 5 * 60  # bars × 5min
 
 
-def detect_cb_compression(df_5m: pd.DataFrame) -> dict | None:
-    """
-    Detect CB (Compression Breakout) signal on last complete 5m bar.
-    Exact params from bt_trail_sweep.py:
-      - 3-bar compression: max(last 3 bar ranges) < 0.7 × ATR(14)
-      - ATR filter: 2.5 <= ATR <= 4.5
-      - RSI filter: RSI(14) < 70
-      - Time filter: AM 09:15-10:45, PM 13:15-14:15
-      - Dedup: 25 min between signals
-    """
+def detect_cb_signal(df_5m: pd.DataFrame) -> dict | None:
+    """Dedup wrapper around combo.detect()."""
     global _cb_last_signal_time
-
-    if len(df_5m) < 20:
-        return None
-
-    # Dedup: skip if too recent
     if _cb_last_signal_time and (vn_now() - _cb_last_signal_time).total_seconds() < CB_DEDUP_SECONDS:
         return None
+    return _cb_combo.detect(df_5m)
 
-    import pandas_ta as ta
 
-    atr_s = ta.atr(df_5m["high"], df_5m["low"], df_5m["close"], length=14)
-    rsi_s = ta.rsi(df_5m["close"], length=ENTRY_FILTER["rsi_period"])
-    if atr_s is None or rsi_s is None:
+# ─── NR4 Combo Instance ──────────────────────────────────────────────────────
+
+_nr4_combo = get_combo("NR4")
+_nr4_last_signal_time: datetime | None = None
+NR4_DEDUP_SECONDS = _nr4_combo.dedup_bars * 5 * 60  # bars × 5min
+
+
+def detect_nr4_signal(df_5m: pd.DataFrame) -> dict | None:
+    """Dedup wrapper around NR4 combo.detect()."""
+    global _nr4_last_signal_time
+    if _nr4_last_signal_time and (vn_now() - _nr4_last_signal_time).total_seconds() < NR4_DEDUP_SECONDS:
         return None
+    return _nr4_combo.detect(df_5m)
 
-    last_idx = len(df_5m) - 1
-    atr_v = float(atr_s.iloc[last_idx])
-    rsi_v = float(rsi_s.iloc[last_idx])
 
-    if pd.isna(atr_v) or pd.isna(rsi_v):
-        return None
+def check_nr4_3m_alignment(df_3m: pd.DataFrame | None, sig_time_str: str) -> bool:
+    """Check if 3m also shows NR4 SHORT within ±15min of 5m signal.
 
-    # ATR filter: 2.5 <= ATR <= 4.5
-    if not (ENTRY_FILTER["atr_min"] <= atr_v <= ENTRY_FILTER["atr_max"]):
-        return None
-
-    # RSI filter: < 70
-    if rsi_v >= ENTRY_FILTER["rsi_max"]:
-        return None
-
-    # Time filter: AM 09:15-10:45, PM 13:15-14:15
+    Used for strength assessment (confidence boost), not as a filter.
+    """
+    if df_3m is None or len(df_3m) < 20:
+        return False
     try:
-        t = pd.to_datetime(df_5m["time"].iloc[-1]) if "time" in df_5m.columns else df_5m.index[-1]
-        mins = t.hour * 60 + t.minute
+        sig_time = pd.to_datetime(sig_time_str)
     except Exception:
-        return None
+        return False
 
-    am_ok = (9 * 60 + 15) <= mins <= (10 * 60 + 45)
-    pm_ok = (13 * 60 + 15) <= mins <= (14 * 60 + 15)
-    if not (am_ok or pm_ok):
-        return None
-
-    # 3-bar compression: max range of bars [last_idx-3 : last_idx] < 0.7 × ATR
-    N = 3
-    if last_idx < N:
-        return None
-    ranges = (df_5m["high"] - df_5m["low"]).values
-    if max(ranges[last_idx - N: last_idx]) >= 0.7 * atr_v:
-        return None
-
-    session = "AM" if mins < 12 * 60 else "PM"
-    time_str = str(df_5m["time"].iloc[-1]) if "time" in df_5m.columns else str(df_5m.index[-1])
-
-    return {
-        "price": float(df_5m["close"].iloc[-1]),
-        "high": float(df_5m["high"].iloc[-1]),
-        "low": float(df_5m["low"].iloc[-1]),
-        "atr": atr_v,
-        "rsi": rsi_v,
-        "session": session,
-        "time": time_str,
-        "interval": "5m",
-        "confidence": 1,
-    }
+    # Check last 5 bars of 3m (= 15 min window)
+    lookback = min(5, len(df_3m) - 14)
+    for offset in range(lookback):
+        idx = len(df_3m) - 1 - offset
+        if idx < _nr4_combo.nr4_lookback:
+            break
+        row_time = pd.to_datetime(df_3m["time"].iloc[idx]) if "time" in df_3m.columns else df_3m.index[idx]
+        if abs((row_time - sig_time).total_seconds()) > 900:
+            continue
+        # Check NR4 condition on this 3m bar
+        sub = df_3m.iloc[max(0, idx - 19):idx + 1].reset_index(drop=True)
+        result = _nr4_combo.detect(sub)
+        if result is not None:
+            return True
+    return False
 
 
 # ─── Main Scan Loop ───────────────────────────────────────────────────────────
@@ -290,9 +229,10 @@ def detect_cb_compression(df_5m: pd.DataFrame) -> dict | None:
 def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict,
              position_manager: PositionManager | None = None,
              portfolio_mgr: PortfolioManager | None = None,
-             pending_signals: dict | None = None):
+             pending_signals: dict | None = None,
+             ml_filter: MLFilter | None = None):
     """One CB scan cycle: detect compression, queue pending, confirm on breakout, enter."""
-    global _last_regime, _cb_last_signal_time
+    global _last_regime, _cb_last_signal_time, _nr4_last_signal_time
 
     if pending_signals is None:
         pending_signals = {}
@@ -328,9 +268,10 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
     elif portfolio_mgr:
         portfolio_mgr.tick()
 
-    # --- Fetch 5m and 15m data ---
+    # --- Fetch 5m, 3m, and 15m data ---
     _now = vn_now()
     df_5m = None
+    df_3m = None
     df_15m = None
     try:
         df_5m = fetcher.get_futures_ohlcv(
@@ -339,6 +280,13 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         )
     except Exception as e:
         print(f"  [5m] Fetch error: {e}")
+    try:
+        df_3m = fetcher.get_futures_ohlcv(
+            SYMBOL, (_now - timedelta(days=3)).strftime("%Y-%m-%d"),
+            _now.strftime("%Y-%m-%d"), interval="3m",
+        )
+    except Exception as e:
+        print(f"  [3m] Fetch error: {e}")
     try:
         df_15m = fetcher.get_futures_ohlcv(
             SYMBOL, (_now - timedelta(days=10)).strftime("%Y-%m-%d"),
@@ -362,7 +310,7 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
     cb_sig = None
     if df_5m is not None and len(df_5m) >= 20 and not volatile:
         df_5m_complete = df_5m.iloc[:-1] if is_trading_hours() else df_5m
-        cb_sig = detect_cb_compression(df_5m_complete)
+        cb_sig = detect_cb_signal(df_5m_complete)
         if cb_sig:
             print(f"  [CB] Compression @ {cb_sig['time']} "
                   f"ATR={cb_sig['atr']:.2f} RSI={cb_sig['rsi']:.0f} [{cb_sig['session']}]")
@@ -395,6 +343,7 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                 "sig_atr": cb_sig["atr"],
                 "sig_time": cb_sig["time"],
                 "sig_session": cb_sig["session"],
+                "confidence": 1,
                 "age": 0,
             }
             print(f"  [CB/{direction}] PENDING (trigger={trigger:.1f})")
@@ -431,6 +380,72 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                 del pending_signals[pkey]
                 print(f"  [CB/{direction}] EXPIRED (no confirmation)")
 
+    # --- NR4 SHORT detection (last complete 5m bar) ---
+    nr4_sig = None
+    nr4_confidence = 1
+    if df_5m is not None and len(df_5m) >= 20 and not volatile:
+        df_5m_complete = df_5m.iloc[:-1] if is_trading_hours() else df_5m
+        nr4_sig = detect_nr4_signal(df_5m_complete)
+        if nr4_sig:
+            # Check 3m alignment for strength assessment
+            if check_nr4_3m_alignment(df_3m, nr4_sig["time"]):
+                nr4_confidence = 2
+            strength = "STRONG (3m aligned)" if nr4_confidence == 2 else "normal"
+            print(f"  [NR4] NR4 compression @ {nr4_sig['time']} "
+                  f"ATR={nr4_sig['atr']:.2f} [{nr4_sig['session']}] strength={strength}")
+
+    if nr4_sig and signal_tracker.is_disabled("NR4"):
+        print(f"  [NR4] Disabled by decay tracker")
+        nr4_sig = None
+
+    # --- NR4: queue SELL pending only (SHORT-only strategy) ---
+    if nr4_sig and portfolio_mgr and not portfolio_mgr.in_cooldown:
+        _nr4_last_signal_time = vn_now()
+        pkey = "NR4_SELL"
+        if pkey not in pending_signals:
+            direction_int = -1
+            if not (portfolio_mgr.current_direction != 0
+                    and direction_int != portfolio_mgr.current_direction
+                    and not portfolio_mgr.should_flip(direction_int, "5m", 1)):
+                trigger = nr4_sig["low"] - 0.1
+                alert_key = f"{SYMBOL}_NR4_SELL_{nr4_sig['time']}"
+                pending_signals[pkey] = {
+                    "direction": "SELL",
+                    "combo_short": "NR4",
+                    "best_tf": "5m",
+                    "trigger_price": trigger,
+                    "alert_key": alert_key,
+                    "sig_price": nr4_sig["price"],
+                    "sig_atr": nr4_sig["atr"],
+                    "sig_time": nr4_sig["time"],
+                    "sig_session": nr4_sig["session"],
+                    "confidence": nr4_confidence,
+                    "age": 0,
+                }
+                print(f"  [NR4/SELL] PENDING (trigger={trigger:.1f})")
+
+    # --- Check NR4 pending for next-bar confirmation ---
+    for pkey in list(pending_signals.keys()):
+        if not pkey.startswith("NR4_"):
+            continue
+        ps = pending_signals[pkey]
+        trigger = ps["trigger_price"]
+
+        if df_5m is None or df_5m.empty:
+            del pending_signals[pkey]
+            continue
+
+        last_bar = df_5m.iloc[-1]
+        if float(last_bar["low"]) < trigger:
+            confirmed_items.append(ps)
+            del pending_signals[pkey]
+            print(f"  [NR4/SELL] CONFIRMED (trigger={trigger:.1f})")
+        else:
+            ps["age"] = ps.get("age", 0) + 1
+            if ps["age"] >= 2:
+                del pending_signals[pkey]
+                print(f"  [NR4/SELL] EXPIRED (no confirmation)")
+
     # --- Process confirmed: alert + portfolio entry ---
     any_signal = False
     for ps in confirmed_items:
@@ -447,17 +462,25 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         direction_int = 1 if direction == "BUY" else -1
         dir_icon = "\U0001f7e2" if direction == "BUY" else "\U0001f534"
 
-        sl_mult = 1.2 if session == "AM" else 1.0
-        tp_mult = 4.0
+        sl_mult = get_session_params().get(session, {}).get("sl_atr_mult", 1.2)
+        combo_name = ps["combo_short"]
+        tp_mult = get_combo_config(combo_name).get("tp_atr_mult", 4.0)
         sl = sig_price - direction_int * sl_mult * sig_atr
         tp = sig_price + direction_int * tp_mult * sig_atr
         current_price = float(df_5m.iloc[-1]["close"]) if df_5m is not None else sig_price
 
+        sig_confidence = ps.get("confidence", 1)
+        combo_desc = {
+            "CB": "3-bar compression &lt; 0.7\u00d7ATR confirmed",
+            "NR4": "NR4 SHORT \u2014 narrowest range in 4 bars confirmed",
+        }.get(combo_name, f"{combo_name} signal confirmed")
+        strength_tag = " | \u2b50 3m aligned" if sig_confidence >= 2 else ""
+
         msg = (
-            f"{dir_icon} <b>CB {direction} [5m] \u2014 {SYMBOL}</b>\n"
+            f"{dir_icon} <b>{combo_name} {direction} [{ps['best_tf']}] \u2014 {SYMBOL}</b>\n"
             f"{'─' * 24}\n"
-            f"3-bar compression &lt; 0.7\u00d7ATR confirmed\n"
-            f"Session: {session} | ATR: {sig_atr:.2f} pts\n"
+            f"{combo_desc}\n"
+            f"Session: {session} | ATR: {sig_atr:.2f} pts{strength_tag}\n"
             f"Signal bar: <code>{ps['sig_time']}</code>\n"
             f"\n<b>Entry:</b> <code>{sig_price:,.1f}</code> (current: {current_price:,.1f})\n"
             f"SL: <code>{sl:,.1f}</code> ({sl_mult}\u00d7ATR = {sl_mult * sig_atr:.1f} pts)\n"
@@ -467,7 +490,7 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
 
         notifier.send(msg)
         sent_alerts[alert_key] = time.time()
-        print(f"  [CB/5m] {direction} \u2192 entry={sig_price:.1f} SL={sl:.1f} TP={tp:.1f}")
+        print(f"  [{combo_name}/{ps['best_tf']}] {direction} \u2192 entry={sig_price:.1f} SL={sl:.1f} TP={tp:.1f}")
 
         # Portfolio entry
         if portfolio_mgr:
@@ -492,6 +515,13 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                 except Exception:
                     pass
 
+            # ML filter check
+            if ml_filter and ml_filter.is_active and df_5m is not None:
+                ml_result = ml_filter.predict(df_5m, len(df_5m) - 1, direction_int)
+                print(f"  [ML] P(win)={ml_result['p_win']:.3f} → {ml_result['reason']}")
+                if not ml_result["should_enter"]:
+                    continue
+
             if portfolio_mgr.should_flip(direction_int, "5m", 1):
                 portfolio_mgr.execute_flip(current_price)
 
@@ -501,15 +531,15 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                     direction=direction_int,
                     entry_price=sig_price,
                     atr=sig_atr,
-                    combo="CB",
-                    timeframe="5m",
-                    confidence=1,
+                    combo=combo_name,
+                    timeframe=ps["best_tf"],
+                    confidence=ps.get("confidence", 1),
                     pre_move_ratio=pre_move_ratio,
                 )
 
     if not any_signal and not pending_signals:
         status = portfolio_mgr.status_str() if portfolio_mgr else "N/A"
-        print(f"  No CB signal. Portfolio: {status}")
+        print(f"  No signal. Portfolio: {status}")
 
     # Cleanup alerts older than 30 min
     cutoff = time.time() - 1800
@@ -522,6 +552,7 @@ def main():
     parser = argparse.ArgumentParser(description="VN30F1M CB Scanner")
     parser.add_argument("--once", action="store_true", help="Run once then exit")
     parser.add_argument("--no-trade", action="store_true", help="Signal only, no real orders")
+    parser.add_argument("--ml-shadow", action="store_true", help="Enable ML filter in shadow mode (log only)")
     args = parser.parse_args()
 
     fetcher = DataFetcher()
@@ -554,11 +585,14 @@ def main():
     else:
         print("[MODE] Signal-only (--no-trade)")
 
+    sp = get_session_params()
+    am_p = sp.get("AM", {}); pm_p = sp.get("PM", {})
+    ae = get_config().get("adaptive_exit", {})
     print(f"CB Scanner: {SYMBOL}")
-    print(f"Strategy: CB/5m — 3-bar compression < 0.7\u00d7ATR breakout")
-    print(f"  AM: SL=1.2\u00d7ATR, trail@5pts/2.0\u00d7ATR, max_hold=24 bars")
-    print(f"  PM: SL=1.0\u00d7ATR, trail@4pts/1.5\u00d7ATR, max_hold=12 bars")
-    print(f"  Adaptive exit: AM pre_move/ATR > 0.8 \u2192 exit@4pts")
+    print(f"Strategy: CB/5m \u2014 3-bar compression < 0.7\u00d7ATR breakout")
+    print(f"  AM: SL={am_p.get('sl_atr_mult',1.5)}\u00d7ATR, trail@{am_p.get('trail_activate_pts',7.0)}pts/{am_p.get('trail_atr_mult',2.5)}\u00d7ATR, max_hold={am_p.get('max_hold_bars',30)} bars")
+    print(f"  PM: SL={pm_p.get('sl_atr_mult',1.2)}\u00d7ATR, trail@{pm_p.get('trail_activate_pts',6.0)}pts/{pm_p.get('trail_atr_mult',1.0)}\u00d7ATR, max_hold={pm_p.get('max_hold_bars',8)} bars")
+    print(f"  Adaptive exit: AM pre_move/ATR > {ae.get('pre_move_ratio_threshold',0.8)} \u2192 MFE\u2265{ae.get('mfe_trigger_pts',2.0)}, exit@{ae.get('exit_target_pts',3.2)}pts")
     print(f"Scan interval: {SCAN_INTERVAL}s (positions) / 60s (signals)")
     print(f"Trading: {'LIVE' if dnse_executor else 'SIGNAL-ONLY'}")
     print("=" * 50)
@@ -590,9 +624,20 @@ def main():
     sent_alerts: dict = {}
     pending_signals: dict = {}
 
+    # --- ML Filter ---
+    ml_cfg = get_config().get("ml_filter", {})
+    if args.ml_shadow:
+        ml_cfg["enabled"] = True
+        ml_cfg["shadow_mode"] = True
+    ml_filter = MLFilter(ml_cfg) if ml_cfg.get("enabled") else None
+    if ml_filter and ml_filter.is_active:
+        mode_str = "SHADOW" if ml_filter.shadow_mode else "LIVE"
+        print(f"[ML] Filter active ({mode_str}), threshold={ml_filter.threshold:.2f}")
+
     if args.once:
         run_scan(fetcher, notifier, sent_alerts, position_manager,
-                 portfolio_mgr=portfolio_manager, pending_signals=pending_signals)
+                 portfolio_mgr=portfolio_manager, pending_signals=pending_signals,
+                 ml_filter=ml_filter)
         return
 
     notifier.send(
@@ -668,7 +713,8 @@ def main():
             if time.time() - _last_full_scan >= FULL_SCAN_INTERVAL:
                 _last_full_scan = time.time()
                 run_scan(fetcher, notifier, sent_alerts, position_manager,
-                         portfolio_mgr=portfolio_manager, pending_signals=pending_signals)
+                         portfolio_mgr=portfolio_manager, pending_signals=pending_signals,
+                         ml_filter=ml_filter)
 
         except KeyboardInterrupt:
             print("\nStopped by user.")

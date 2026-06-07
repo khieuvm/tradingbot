@@ -162,7 +162,7 @@ Candidate rules tested:
   Vol >= 1.2x filter:           +1.87/d (kills frequency) ✗
 
 Verdict: Apply adaptive exit rule. Vol filter is confidence boost only.
-Implementation: sim_day.py / bt_new_combos.py
+Implementation: combos/<name>.py inheriting BaseCombo
 ```
 
 ## Key Research Findings (Running Log)
@@ -186,5 +186,8 @@ Implementation: sim_day.py / bt_new_combos.py
 
 - `references/proven_edges.md` — All validated findings with stats
 - `references/anti_patterns.md` — Confirmed dead ends
-- `bt_robust.py` — Walk-forward engine
+- `backtest/engine.py` — CB backtest engine (trail sweep, simulation)
+- `combos/base.py` — BaseCombo interface for new strategies
+- `combos/cb.py` — CB reference implementation
 - `src/data_fetcher.py` — Data access (note API limits above)
+- `research/` — Place new analysis scripts here

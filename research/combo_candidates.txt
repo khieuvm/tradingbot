@@ -1,0 +1,249 @@
+═══════════════════════════════════════════════════════════════════════════
+COMBO CANDIDATES — Collected from Research Phase (2026-06-05)
+Sources: Reddit, GitHub, Quant papers, Education sites
+Target: VN30F1M 5m intraday futures
+═══════════════════════════════════════════════════════════════════════════
+
+STATUS:
+  ✅ = Implemented & live
+  🔬 = Backtested (see research/backtest_20combos.py)
+  📋 = Research only (not yet backtested)
+
+═══════════════════════════════════════════════════════════════════════════
+#1. CB — Compression Breakout (BASELINE) ✅
+═══════════════════════════════════════════════════════════════════════════
+Signal: 3-bar squeeze (max range < 0.7×ATR) on 5m → breakout direction
+Entry:  Next-bar confirmation (high+0.1 BUY / low-0.1 SELL)
+Filter: ATR 2.5-4.5 (AM) / 2.0-5.0 (PM), RSI<70, dedup 5 bars
+Exit:   Trail@5pts/2.0×ATR (AM), Trail@4pts/1.5×ATR (PM), BE@4pts
+Result: WR 65-68%, PF 4.5-4.9, +6.0-6.3/d (129d walk-forward)
+File:   combos/cb.py
+
+═══════════════════════════════════════════════════════════════════════════
+#2. NR7 — Narrowest Range 7 Bars 🔬
+═══════════════════════════════════════════════════════════════════════════
+Signal: Current bar range is smallest in last 7 bars + range < 0.8×ATR
+Entry:  Breakout direction on next bar
+Filter: ATR 2.5-4.5, time window AM/PM
+Exit:   Standard trail (same as CB)
+Notes:  Classic "NR7 day" concept adapted to intraday 5m. More selective
+        than NR4 (fewer signals). Both directions.
+Source: reddit_combos.md, backtest_20combos.py (COMBO 2)
+
+═══════════════════════════════════════════════════════════════════════════
+#3. NR4 — Narrowest Range 4 Bars (SHORT only) ✅
+═══════════════════════════════════════════════════════════════════════════
+Signal: Current bar is smallest in last 4 bars + range < 0.7×ATR
+Entry:  SHORT only (SELL trigger = low - 0.1)
+Filter: ATR 2.5-4.5, time windows AM 09:15-10:45 / PM 13:15-14:15
+Exit:   Same session_params as CB
+Notes:  SHORT-only because research showed no directional bias both ways
+        (WR 48.4% on LONG, 51.6% SHORT). SHORT bias from market structure.
+        3m alignment used as confidence boost (not filter).
+File:   combos/nr4.py
+Source: backtest_20combos.py (COMBO 3), analyze_nr4_*.py
+
+═══════════════════════════════════════════════════════════════════════════
+#4. ORB — Opening Range Breakout ❌ REJECTED (2026-06-06)
+═══════════════════════════════════════════════════════════════════════════
+Signal: First 3 bars form opening range (OR). Breakout above OR_high (BUY)
+        or below OR_low (SELL) in bars 4-8.
+Entry:  Break of OR high/low + 0.1 offset
+Filter: OR range < 0.8×ATR, OR range >= 0.3 pts
+Exit:   Standard session trail
+Result: 5m: T=68, WR 32.4%, PF 0.82, -0.22/d (130d)
+        Best filtered: T=15, WR 40%, PF 1.39, +0.12/d (not viable)
+        3m/1m: all negative
+WHY FAIL: VN30F1M lacks continuation after opening range. 38% trades are
+        immediate fakeouts (MFE<2pts). No feature (ATR, RSI, ADX, OR ratio,
+        candle body) can pre-identify SL trades — distributions overlap 100%.
+        Problem is structural, not filterable.
+Source: reddit_combos.md (Strategy 1), backtest_20combos.py (COMBO 4)
+Analysis: research/analyze_orb_multitf.py, research/analyze_orb_sl_deep.py
+
+═══════════════════════════════════════════════════════════════════════════
+#5. Double Inside Bar ❌ REJECTED (2026-06-06)
+═══════════════════════════════════════════════════════════════════════════
+Signal: Bar[i] inside Bar[i-1], Bar[i-1] inside Bar[i-2] (nested compression)
+Entry:  Breakout direction on next bar
+Filter: Mother bar range 0.5-2.0×ATR, ATR 2.5-4.5
+Exit:   Standard trail
+Result: 5m: T=6/130d (0.05 signals/day!), too rare to evaluate
+        3m: T=10/25d, WR 50%, PF 0.95, -0.02/d
+        1m: T=13/25d, WR 31%, PF 0.75, -0.19/d
+WHY FAIL: Pattern too strict for VN30F1M — requires literal nesting of 3
+        bars (34× rarer than CB). Even where signals appear (1m), no edge.
+        LONG direction WR < 15% on all TFs. 0% overlap with CB signals.
+Source: education_combos.md, backtest_20combos.py (COMBO 5)
+Analysis: research/analyze_double_ib_multitf.py
+
+═══════════════════════════════════════════════════════════════════════════
+#6. TTM Squeeze Fire ❌ REJECTED (2026-06-06)
+═══════════════════════════════════════════════════════════════════════════
+Signal: Bollinger Bands inside Keltner Channel (squeeze ON) for 3+ bars,
+        then squeeze releases (BB expands past KC). Direction from momentum.
+Entry:  On first bar where squeeze turns OFF (BB exits KC)
+Filter: Must have been in squeeze >= 3 bars, ATR 2.5-4.5
+Exit:   Standard trail
+Result: 5m: T=7/130d, WR 14%, PF 0.16, -0.16/d (too few signals)
+        3m: T=5/25d, WR 20%, -0.45/d
+        1m: T=10/25d, WR 30%, -0.27/d
+WHY FAIL: Squeeze is ONLY a volatility predictor, carries ZERO directional
+        info. Momentum/linreg predict direction < 44% (below coin flip).
+        Signal also extremely rare on 5m (squeeze ON only 2.6% of bars).
+        Could serve as CB volatility boost filter, not standalone.
+Source: github_combos.md, backtest_20combos.py (COMBO 6)
+Analysis: research/analyze_ttm_multitf.py
+
+═══════════════════════════════════════════════════════════════════════════
+#7. Multi-TF Compression (5m + 15m) ❌ REJECTED (2026-06-06)
+═══════════════════════════════════════════════════════════════════════════
+Signal: CB compression on BOTH 5m AND 15m simultaneously
+Entry:  Same as CB (breakout on 5m)
+Filter: 5m: 3-bar < 0.7×ATR + 15m: 2-bar < 0.7×ATR(15m)
+Exit:   Standard trail
+Result: 5m+15m: T=148, WR 58.8%, PF 3.21, +2.93/d (vs baseline +6.19)
+WHY FAIL: 15m filter is ANTI-PREDICTIVE. Removes 40% of signals but keeps
+        the WORSE half. WR drops, PF drops. Higher TF compression does not
+        add predictive value — it is correlated but uninformative.
+Source: quant_combos.md, backtest_20combos.py (COMBO 7)
+Analysis: research/analyze_cb_filters_v2.py
+
+═══════════════════════════════════════════════════════════════════════════
+#8. Donchian Channel Breakout (12-bar) 🔬
+═══════════════════════════════════════════════════════════════════════════
+Signal: Close breaks above 12-bar Donchian high (BUY) or below 12-bar
+        Donchian low (SELL). Trend-following momentum signal.
+Entry:  On close above/below DC
+Filter: ATR 2.5-4.5, time windows
+Exit:   Standard trail
+Notes:  Turtle-trading adapted to intraday. Breakout of N-period
+        high/low channel. More trend-following than compression-based.
+        May work well in trending sessions.
+Source: reddit_combos.md, backtest_20combos.py (COMBO 8)
+
+═══════════════════════════════════════════════════════════════════════════
+#9. Gap Fade ❌ REJECTED (2026-06-06)
+═══════════════════════════════════════════════════════════════════════════
+Signal: AM open gaps > threshold from prior PM close → FADE the gap
+Entry:  At AM open or after extension, direction opposite to gap
+Filter: Gap ratio 0.5-2.5×ATR (too small = noise, too big = momentum)
+Exit:   Standard trail or gap-fill based TP
+Result: 5m stretched entry: T=53/130d, WR 64%, PF 2.2, +0.89/d (best)
+        5m naive entry: T=123, WR 36%, PF 0.82, -0.54/d
+        3m/1m: all negative
+WHY FAIL: VN30F1M gaps are structural (median 7.4pts = overnight global
+        adjustment over 18.5h), not inefficiencies. Fill rate only 58% for
+        large gaps. Entry at open = momentum continuation (WR 17%).
+        "Stretched entry" has micro-edge but 7× below CB and only 0.4
+        trades/day. Not viable standalone.
+Source: reddit_combos.md (Strategy 7), backtest_20combos.py (COMBO 9)
+Analysis: research/analyze_gap_fade_multitf.py
+
+═══════════════════════════════════════════════════════════════════════════
+#10. CB + Choppiness Index Filter ❌ REJECTED (2026-06-06)
+═══════════════════════════════════════════════════════════════════════════
+Signal: Same CB signal BUT with Choppiness Index < 61.8 AND falling
+Entry:  Same as CB
+Filter: CI(14) < 61.8 (market exiting chop, transitioning to trend),
+        CI current < CI previous (momentum building)
+Exit:   Standard trail
+Result: 5m CI<50: T=178, WR 58.4%, PF 3.89, +3.92/d (vs baseline +6.19)
+        All thresholds 50-70 lose -2.26 to -2.29 P/D vs baseline
+WHY FAIL: CB already fires in low-CI conditions by design (compression =
+        transitioning from chop). CI is near-redundant with CB signal.
+        Filter acts as REVERSE SELECTOR — removes top-performing signals.
+Source: backtest_20combos.py (COMBO 10)
+Analysis: research/analyze_cb_filters_v2.py
+
+═══════════════════════════════════════════════════════════════════════════
+#11. CB + ADX Compression (ADX < 20) 🔬
+═══════════════════════════════════════════════════════════════════════════
+Signal: CB signal + ADX < 20 in at least 1 of last 3 bars
+Entry:  Same as CB
+Filter: ADX(14) < 20 = trend absent → breakout from range
+Exit:   Standard trail
+Notes:  ADX below 20 signals "no trend" — classic precondition for
+        range breakout. Combines with CB to confirm compression is
+        in a non-trending environment (breakout more likely to be real).
+Source: backtest_20combos.py (COMBO 11)
+
+═══════════════════════════════════════════════════════════════════════════
+#12. CB + NR7 Combined (Tightest) 🔬
+═══════════════════════════════════════════════════════════════════════════
+Signal: CB compression (3-bar < 0.7×ATR) AND signal bar is also NR7
+        (narrowest range in 7 bars). Double confirmation of compression.
+Entry:  Same as CB
+Filter: Must satisfy BOTH CB and NR7 criteria simultaneously
+Exit:   Standard trail
+Notes:  Most selective combination — requires both pattern types on same
+        bar. Very few signals but extremely high compression confidence.
+Source: backtest_20combos.py (COMBO 12)
+
+═══════════════════════════════════════════════════════════════════════════
+ADDITIONAL CANDIDATES FROM RESEARCH (not backtested yet)
+═══════════════════════════════════════════════════════════════════════════
+
+#13. VWAP Mean Reversion 📋
+Signal: Price deviates > 2 std from VWAP → fade back to VWAP
+Notes:  Requires intraday VWAP calculation. Works best in range-bound
+        sessions. Opposite philosophy from CB (mean reversion vs breakout).
+Source: reddit_combos.md
+
+#14. Micro Pullback in Trend 📋
+Signal: ADX > 25 (trending) + 2-bar pullback to EMA8 → continuation
+Notes:  Trend-following on pullback. Requires established trend first.
+        Could complement CB (which fires during low-trend environments).
+Source: education_combos.md
+
+#15. Volume Spike + Reversal 📋
+Signal: Volume > 2× avg + reversal candle (hammer/shooting star)
+Notes:  Requires reliable tick volume data. Volume climax signals
+        exhaustion/reversal. May work for PM session reversals.
+Source: reddit_combos.md
+
+#16. Keltner Channel Squeeze-to-Breakout 📋
+Signal: Price compresses within KC bands → breakout past upper/lower KC
+Notes:  Similar to TTM but simpler (no BB/KC comparison). Pure KC approach.
+Source: github_combos.md
+
+#17. First Pullback After ORB 📋
+Signal: After ORB breakout succeeds, wait for first pullback to OR level,
+        then re-enter in breakout direction
+Notes:  Second-chance entry after ORB. Reduces risk of false breakout
+        entries. Requires ORB to be implemented first.
+Source: quant_combos.md
+
+═══════════════════════════════════════════════════════════════════════════
+ANALYSIS PRIORITY (recommended order)
+═══════════════════════════════════════════════════════════════════════════
+
+HIGH PRIORITY (most different from CB, likely edge):
+  #4  ORB — Different signal type (time-based range, not compression)
+  #6  TTM Squeeze Fire — Indicator-based, fires at different times
+  #9  Gap Fade — Mean reversion, only AM, uncorrelated with CB
+
+MEDIUM PRIORITY (CB variants, may add marginal edge):
+  #7  Multi-TF CB — Higher quality CB signals
+  #5  Double Inside Bar — Extremely tight compression subset
+  #10 CB + Choppiness — Filter improvement on existing CB
+
+LOWER PRIORITY (need more data / overlaps with existing):
+  #8  Donchian Channel — Trend-following, may conflict with CB philosophy
+  #11 CB + ADX — Another filter variant
+  #12 CB + NR7 — Very few signals (too selective?)
+  #2  NR7 — Similar to NR4 which already underperformed
+  #14 Micro Pullback — Needs different market state
+  #13 VWAP Reversion — Needs VWAP calculation + different philosophy
+
+═══════════════════════════════════════════════════════════════════════════
+NOTES
+═══════════════════════════════════════════════════════════════════════════
+- All combos share same exit framework (session_params from YAML)
+- All must pass cost test: profitable after 0.96 pts/trade
+- Minimum 30 trades for any statistical claim
+- Walk-forward required: 60d IS / 30d OOS, OOS PF > 1.3
+- Key question for each: does it generate UNCORRELATED signals vs CB?
+  (same signal at same time = no diversification benefit)
+- Research scripts in: research/backtest_20combos.py, research/backtest_improved_*.py
+- Detailed analysis scripts: research/analyze_*.py
