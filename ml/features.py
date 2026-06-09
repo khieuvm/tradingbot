@@ -1,7 +1,7 @@
 """
 Feature computation for ML meta-labeling.
 
-Computes 25 features from a 5m OHLCV DataFrame at a given signal bar index.
+Computes features from a 5m OHLCV DataFrame at a given signal bar index.
 Features are chosen for their predictive power in classifying CB trade outcomes.
 """
 import numpy as np
@@ -35,6 +35,15 @@ META_LABEL_FEATURES = [
     "ret_1",
     "stoch_k",
     "time_to_session_end",
+    # V2 features
+    "trend_strength_10",
+    "trend_consistency",
+    "atr_acceleration",
+    "bars_since_last_compression",
+    "daily_trade_idx",
+    "session_return",
+    "high_low_ratio_5",
+    "close_vs_range",
 ]
 
 
@@ -87,6 +96,17 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df["vol_ratio"] = (v / vol_ema20).where(vol_ema20 > 0, np.nan)
     else:
         df["vol_ratio"] = 1.0
+
+    # V2: trend strength — slope of close over last 10 bars
+    df["trend_strength_10"] = c.rolling(10).apply(
+        lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) == 10 else 0,
+        raw=True
+    )
+
+    # V2: compression detection flag for "bars since last compression"
+    ranges = h - l
+    atr_vals = df["atr_14"]
+    df["_comp_flag"] = (ranges < 0.7 * atr_vals).astype(int)
 
     return df
 
@@ -154,6 +174,73 @@ def extract_features_at(df: pd.DataFrame, idx: int, direction: int = 0) -> dict 
     range_pct = bar_range / c if c > 0 else 0
     upper_wick_ratio = (h - max(c, o)) / bar_range if bar_range > 0 else 0
 
+    # V2: Trend strength — normalized slope
+    trend_raw = _safe_float(row, "trend_strength_10", 0)
+    trend_strength_10 = trend_raw / atr_14 if atr_14 > 0 else 0
+
+    # V2: Trend consistency — how many of last 10 bars closed in same direction as trend
+    if idx >= 10:
+        last_10_rets = df["close"].iloc[idx-9:idx+1].diff().values[1:]
+        if trend_raw > 0:
+            trend_consistency = (last_10_rets > 0).sum() / 9
+        elif trend_raw < 0:
+            trend_consistency = (last_10_rets < 0).sum() / 9
+        else:
+            trend_consistency = 0.5
+    else:
+        trend_consistency = 0.5
+
+    # V2: ATR acceleration — is volatility increasing or decreasing?
+    atr_acceleration = (atr_5 - atr_14) / atr_14 if atr_14 > 0 else 0
+
+    # V2: Bars since last compression (before current signal)
+    if "_comp_flag" in df.columns and idx >= 10:
+        comp_flags = df["_comp_flag"].iloc[max(0, idx-20):idx].values
+        last_comp_positions = np.where(comp_flags == 1)[0]
+        if len(last_comp_positions) > 0:
+            bars_since_last_compression = len(comp_flags) - 1 - last_comp_positions[-1]
+        else:
+            bars_since_last_compression = 20
+    else:
+        bars_since_last_compression = 10
+
+    # V2: Daily trade index — which signal is this today (1st, 2nd, 3rd)?
+    current_date = t.date() if hasattr(t, 'date') else pd.Timestamp(t).date()
+    if "date" in df.columns:
+        same_day_bars = df[df["date"] == current_date]
+        if "_comp_flag" in df.columns and len(same_day_bars) > 0:
+            day_start_iloc = df.index.get_loc(same_day_bars.index[0])
+            comp_before = df["_comp_flag"].iloc[day_start_iloc:idx].sum()
+            daily_trade_idx = min(comp_before, 5)
+        else:
+            daily_trade_idx = 1
+    else:
+        daily_trade_idx = 1
+
+    # V2: Session return (how far price has moved since session open)
+    if "session" in df.columns and "date" in df.columns:
+        session_val = "PM" if is_pm else "AM"
+        same_session = df[(df["date"] == current_date) & (df["session"] == session_val)]
+        if len(same_session) > 0:
+            session_open = float(same_session.iloc[0]["open"])
+            session_return = (c - session_open) / atr_14 if atr_14 > 0 else 0
+        else:
+            session_return = 0
+    else:
+        session_return = 0
+
+    # V2: High-low ratio over last 5 bars (directional pressure)
+    if idx >= 5:
+        h5 = df["high"].iloc[idx-4:idx+1].values
+        l5 = df["low"].iloc[idx-4:idx+1].values
+        c5 = df["close"].iloc[idx-4:idx+1].values
+        high_low_ratio_5 = np.mean((c5 - l5) / np.maximum(h5 - l5, 0.01))
+    else:
+        high_low_ratio_5 = 0.5
+
+    # V2: Close position in current bar's range
+    close_vs_range = (c - l) / bar_range if bar_range > 0 else 0.5
+
     features = {
         "atr_14": atr_14,
         "atr_pct": atr_14 / c,
@@ -181,6 +268,15 @@ def extract_features_at(df: pd.DataFrame, idx: int, direction: int = 0) -> dict 
         "bb_pos": _safe_float(row, "bb_pos", 0),
         "stoch_k": _safe_float(row, "stoch_k", 50),
         "time_to_session_end": time_to_session_end,
+        # V2 features
+        "trend_strength_10": trend_strength_10,
+        "trend_consistency": trend_consistency,
+        "atr_acceleration": atr_acceleration,
+        "bars_since_last_compression": bars_since_last_compression,
+        "daily_trade_idx": daily_trade_idx,
+        "session_return": session_return,
+        "high_low_ratio_5": high_low_ratio_5,
+        "close_vs_range": close_vs_range,
     }
     return features
 

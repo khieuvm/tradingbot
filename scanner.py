@@ -37,6 +37,7 @@ from src.trade_logger import TradeLogger
 from src.dnse_auth import create_authenticated_client
 from src.dnse_executor import DnseExecutor
 from ml.model import MLFilter
+from ml.standalone_model import StandaloneMLSignal
 
 # --- CONFIG ---------------------------------------------------------------
 from src.strategy_config import get_config, get_combo_config, get_session_params
@@ -230,7 +231,8 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
              position_manager: PositionManager | None = None,
              portfolio_mgr: PortfolioManager | None = None,
              pending_signals: dict | None = None,
-             ml_filter: MLFilter | None = None):
+             ml_filter: MLFilter | None = None,
+             standalone_ml: StandaloneMLSignal | None = None):
     """One CB scan cycle: detect compression, queue pending, confirm on breakout, enter."""
     global _last_regime, _cb_last_signal_time, _nr4_last_signal_time
 
@@ -537,6 +539,25 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                     pre_move_ratio=pre_move_ratio,
                 )
 
+    # --- Standalone ML Signal Check (independent of CB) ---
+    if standalone_ml and standalone_ml.is_active and df_5m is not None and len(df_5m) >= 60:
+        try:
+            ml_signal = standalone_ml.check_signal(df_5m)
+            if ml_signal:
+                action = ml_signal["action"]
+                print(f"  [ML-Standalone] {action}: {ml_signal['direction_str']} "
+                      f"P={ml_signal['prob']:.3f} @ {ml_signal['price']:.1f} "
+                      f"({ml_signal['session']})")
+                if action == "SHADOW":
+                    notifier.send(
+                        f"<b>[ML Shadow] {ml_signal['direction_str']}</b>\n"
+                        f"Prob: {ml_signal['prob']:.3f} | Price: {ml_signal['price']:.1f}\n"
+                        f"Session: {ml_signal['session']} | H={ml_signal['horizon']}\n"
+                        f"<i>Shadow mode — not trading</i>"
+                    )
+        except Exception as e:
+            print(f"  [ML-Standalone] Error: {e}")
+
     if not any_signal and not pending_signals:
         status = portfolio_mgr.status_str() if portfolio_mgr else "N/A"
         print(f"  No signal. Portfolio: {status}")
@@ -553,6 +574,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="Run once then exit")
     parser.add_argument("--no-trade", action="store_true", help="Signal only, no real orders")
     parser.add_argument("--ml-shadow", action="store_true", help="Enable ML filter in shadow mode (log only)")
+    parser.add_argument("--ml-standalone", action="store_true", help="Enable standalone ML signals (shadow mode)")
     args = parser.parse_args()
 
     fetcher = DataFetcher()
@@ -624,7 +646,7 @@ def main():
     sent_alerts: dict = {}
     pending_signals: dict = {}
 
-    # --- ML Filter ---
+    # --- ML Filter (meta-label for CB) ---
     ml_cfg = get_config().get("ml_filter", {})
     if args.ml_shadow:
         ml_cfg["enabled"] = True
@@ -634,10 +656,25 @@ def main():
         mode_str = "SHADOW" if ml_filter.shadow_mode else "LIVE"
         print(f"[ML] Filter active ({mode_str}), threshold={ml_filter.threshold:.2f}")
 
+    # --- Standalone ML Signal Generator (always on, shadow by default) ---
+    standalone_cfg = get_config().get("ml_standalone", {})
+    if args.ml_standalone:
+        standalone_cfg["enabled"] = True
+    if not standalone_cfg.get("enabled"):
+        standalone_cfg["enabled"] = True
+        standalone_cfg["shadow_mode"] = True
+    standalone_ml = StandaloneMLSignal(standalone_cfg)
+    if not standalone_ml.is_active:
+        standalone_ml = None
+    else:
+        mode_str = "SHADOW" if standalone_ml.shadow_mode else "LIVE"
+        print(f"[ML-Standalone] Active ({mode_str}), thr={standalone_ml.threshold:.2f}, "
+              f"filter={standalone_ml.session_filter}+{standalone_ml.direction_filter}")
+
     if args.once:
         run_scan(fetcher, notifier, sent_alerts, position_manager,
                  portfolio_mgr=portfolio_manager, pending_signals=pending_signals,
-                 ml_filter=ml_filter)
+                 ml_filter=ml_filter, standalone_ml=standalone_ml)
         return
 
     notifier.send(
@@ -714,7 +751,7 @@ def main():
                 _last_full_scan = time.time()
                 run_scan(fetcher, notifier, sent_alerts, position_manager,
                          portfolio_mgr=portfolio_manager, pending_signals=pending_signals,
-                         ml_filter=ml_filter)
+                         ml_filter=ml_filter, standalone_ml=standalone_ml)
 
         except KeyboardInterrupt:
             print("\nStopped by user.")

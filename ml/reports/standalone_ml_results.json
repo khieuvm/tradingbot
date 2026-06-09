@@ -1,0 +1,190 @@
+{
+  "horizon_3": [
+    {
+      "threshold": 0.52,
+      "horizon": 3,
+      "n_trades": 343,
+      "trades_per_day": 5.72,
+      "win_rate": 45.2,
+      "total_pnl": -223.78,
+      "pnl_per_day": -3.73,
+      "avg_pnl": -0.652,
+      "profit_factor": 0.75,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.55,
+      "horizon": 3,
+      "n_trades": 171,
+      "trades_per_day": 2.85,
+      "win_rate": 48.5,
+      "total_pnl": -23.36,
+      "pnl_per_day": -0.39,
+      "avg_pnl": -0.137,
+      "profit_factor": 0.93,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.58,
+      "horizon": 3,
+      "n_trades": 30,
+      "trades_per_day": 0.5,
+      "win_rate": 46.7,
+      "total_pnl": -23.4,
+      "pnl_per_day": -0.39,
+      "avg_pnl": -0.78,
+      "profit_factor": 0.63,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.6,
+      "horizon": 3,
+      "n_trades": 3,
+      "trades_per_day": 0.05,
+      "win_rate": 66.7,
+      "total_pnl": -7.58,
+      "pnl_per_day": -0.13,
+      "avg_pnl": -2.527,
+      "profit_factor": 0.54,
+      "test_days": 60,
+      "folds": 3
+    }
+  ],
+  "horizon_6": [
+    {
+      "threshold": 0.52,
+      "horizon": 6,
+      "n_trades": 350,
+      "trades_per_day": 5.83,
+      "win_rate": 51.4,
+      "total_pnl": -108.4,
+      "pnl_per_day": -1.81,
+      "avg_pnl": -0.31,
+      "profit_factor": 0.91,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.55,
+      "horizon": 6,
+      "n_trades": 183,
+      "trades_per_day": 3.05,
+      "win_rate": 54.6,
+      "total_pnl": 65.82,
+      "pnl_per_day": 1.1,
+      "avg_pnl": 0.36,
+      "profit_factor": 1.13,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.58,
+      "horizon": 6,
+      "n_trades": 42,
+      "trades_per_day": 0.7,
+      "win_rate": 47.6,
+      "total_pnl": 14.58,
+      "pnl_per_day": 0.24,
+      "avg_pnl": 0.347,
+      "profit_factor": 1.16,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.6,
+      "horizon": 6,
+      "n_trades": 7,
+      "trades_per_day": 0.12,
+      "win_rate": 42.9,
+      "total_pnl": 1.88,
+      "pnl_per_day": 0.03,
+      "avg_pnl": 0.269,
+      "profit_factor": 1.04,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.63,
+      "horizon": 6,
+      "n_trades": 4,
+      "trades_per_day": 0.07,
+      "win_rate": 25.0,
+      "total_pnl": -18.84,
+      "pnl_per_day": -0.31,
+      "avg_pnl": -4.71,
+      "profit_factor": 0.32,
+      "test_days": 60,
+      "folds": 3
+    }
+  ],
+  "horizon_10": [
+    {
+      "threshold": 0.52,
+      "horizon": 10,
+      "n_trades": 353,
+      "trades_per_day": 5.88,
+      "win_rate": 49.3,
+      "total_pnl": -158.38,
+      "pnl_per_day": -2.64,
+      "avg_pnl": -0.449,
+      "profit_factor": 0.89,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.55,
+      "horizon": 10,
+      "n_trades": 249,
+      "trades_per_day": 4.15,
+      "win_rate": 48.2,
+      "total_pnl": -173.44,
+      "pnl_per_day": -2.89,
+      "avg_pnl": -0.697,
+      "profit_factor": 0.84,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.58,
+      "horizon": 10,
+      "n_trades": 79,
+      "trades_per_day": 1.32,
+      "win_rate": 43.0,
+      "total_pnl": -31.44,
+      "pnl_per_day": -0.52,
+      "avg_pnl": -0.398,
+      "profit_factor": 0.91,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.6,
+      "horizon": 10,
+      "n_trades": 26,
+      "trades_per_day": 0.43,
+      "win_rate": 61.5,
+      "total_pnl": 102.54,
+      "pnl_per_day": 1.71,
+      "avg_pnl": 3.944,
+      "profit_factor": 1.98,
+      "test_days": 60,
+      "folds": 3
+    },
+    {
+      "threshold": 0.63,
+      "horizon": 10,
+      "n_trades": 3,
+      "trades_per_day": 0.05,
+      "win_rate": 100.0,
+      "total_pnl": 31.32,
+      "pnl_per_day": 0.52,
+      "avg_pnl": 10.44,
+      "profit_factor": 999,
+      "test_days": 60,
+      "folds": 3
+    }
+  ]
+}

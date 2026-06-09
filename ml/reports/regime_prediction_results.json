@@ -1,0 +1,58 @@
+[
+  {
+    "model": "GradientBoosting",
+    "target": "bad_session",
+    "n_sessions": 149,
+    "baseline_pnl": 817.1824877381243,
+    "best_threshold": 0.6,
+    "best_improvement": 4.1621985733592055,
+    "detail": {
+      "retained": 148,
+      "skipped": 1,
+      "net_pnl": 821.3446863114835,
+      "precision": 100.0
+    }
+  },
+  {
+    "model": "ExtraTrees",
+    "target": "good_session",
+    "n_sessions": 149,
+    "baseline_pnl": 817.1824877381243,
+    "best_threshold": 0.35,
+    "best_improvement": -4.040000000000077,
+    "detail": {
+      "retained": 148,
+      "skipped": 1,
+      "net_pnl": 813.1424877381243,
+      "precision": 0.0
+    }
+  },
+  {
+    "model": "ExtraTrees",
+    "target": "bad_session",
+    "n_sessions": 149,
+    "baseline_pnl": 817.1824877381243,
+    "best_threshold": 0.6,
+    "best_improvement": -5.060544001928292,
+    "detail": {
+      "retained": 146,
+      "skipped": 3,
+      "net_pnl": 812.121943736196,
+      "precision": 33.33333333333333
+    }
+  },
+  {
+    "model": "GradientBoosting",
+    "target": "good_session",
+    "n_sessions": 149,
+    "baseline_pnl": 817.1824877381243,
+    "best_threshold": 0.25,
+    "best_improvement": -27.0538815679555,
+    "detail": {
+      "retained": 143,
+      "skipped": 6,
+      "net_pnl": 790.1286061701688,
+      "precision": 16.666666666666664
+    }
+  }
+]

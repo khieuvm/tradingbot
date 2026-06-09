@@ -9,7 +9,7 @@ Automated trading bot for VN30F1M (Vietnam VN30 Index Futures, front-month contr
 ### 1. Install dependencies
 
 ```bash
-pip install vnstock dnse pandas pandas_ta pyyaml python-dotenv
+pip install vnstock dnse pandas pandas_ta pyyaml python-dotenv scikit-learn lightgbm
 ```
 
 ### 2. Create `.env` file
@@ -35,10 +35,10 @@ DNSE_OTP_APP_PASSWORD=<Gmail App Password from https://myaccount.google.com/appp
 ### 3. Run
 
 ```bash
-# Signal-only mode (no real orders)
+# Signal-only mode (no real orders) — CB + ML standalone shadow
 python scanner.py --no-trade
 
-# Live trading (auto-auth + real DNSE orders)
+# Live trading (CB trades + ML standalone shadow signals)
 python scanner.py
 
 # Single scan (test)
@@ -187,67 +187,123 @@ Rate limit exceeded → HTTP 429. Bot retries next cycle.
 | `vnstock` symbol error | VN30F1M auto-converts to 41I1G6000 (KRX format) internally |
 | Positions surviving past 11:30 | SESSION exit at 11:25 should catch this; session-change exit at 13:00 as safety net |
 
-## ML Module (Meta-Labeling Signal Filter)
+## ML Module
 
-### Status: INFRASTRUCTURE COMPLETE — Chờ Validation
+### Overview
 
-ML module đã build xong, **chưa bật live** vì OOS validation chưa đủ mạnh.
+Hai hệ thống ML hoạt động song song:
+
+1. **Meta-Label Filter** — Lọc CB signals (chưa bật, CB quá strong để filter)
+2. **Standalone ML Signals** — Dự đoán direction độc lập, chạy bổ sung CB (SHADOW mode)
 
 ### Kiến trúc
 
 ```
 ml/
-  features.py           — 25 features tính từ 5m OHLCV tại signal bar
-  labeler.py            — Chạy backtest → extract features + label (win/loss)
-  train_meta_label.py   — Train LightGBM + purged walk-forward CV
-  model.py              — MLFilter class cho scanner integration
-  config.py             — Default ML params
-  data/cb_trades_labeled.csv   — 222 trades labeled (180d backtest)
-  models/meta_label_latest.pkl — Trained model
-  reports/validation_report.json
+  features.py              — 33 features cho meta-labeling (CB filter)
+  labeler.py               — Generate labeled dataset từ CB backtest
+  train_meta_label.py      — Train meta-label model + purged walk-forward
+  model.py                 — MLFilter class (CB signal filter)
+  config.py                — Default ML params
+
+  standalone_signals.py    — Feature computation + walk-forward experiment (50 features)
+  standalone_model.py      — StandaloneMLSignal class cho scanner + train script
+  analyze_standalone.py    — Fine-tune analysis (threshold sweep + filters)
+  compare_features.py      — OLD vs NEW feature comparison
+  test_all_horizons.py     — Multi-horizon backtest (H=3/6/10)
+  missed_signals_analysis.py — Missed opportunity analysis + feature discovery
+
+  experiment_v2.py         — Multi-config LOOCV experiment
+  regime_prediction.py     — Session-level prediction (marginal results)
+
+  data/cb_trades_labeled.csv        — 222 CB trades labeled
+  models/meta_label_latest.pkl      — Meta-label model (CB filter)
+  models/standalone_ml_latest.pkl   — Standalone ML model (50 features, ExtraTrees)
+  reports/
+    validation_report.json
+    standalone_ml_results.json
+    experiment_v2_results.json
+    standalone_shadow_log.json      — Shadow mode predictions log
 ```
 
-### Cách chạy
+### Standalone ML Signal — Best Config
+
+| Param | Value | Note |
+|-------|-------|------|
+| Model | ExtraTrees (200 trees, depth=6, leaf=50) | Balanced classes |
+| Features | 50 (35 original + 15 new) | ema_align, stoch_rsi, di_spread top new |
+| Horizon | 6 bars (30 min) | Hold period |
+| Threshold | 0.55 | P(long) > 0.55 → BUY, P(long) < 0.45 → SELL |
+| Session filter | AM only | PM signals unprofitable |
+| Direction filter | SELL only | BUY signals weak |
+| OOS result | WR 59.7%, PF 1.57, +1.41 pts/day | 60d walk-forward |
+| Frequency | ~1.3 signals/day | Max 2 per session |
+
+### Cách Chạy
 
 ```bash
-# 1. Generate dataset (chạy lại khi có thêm data)
-python -m ml.labeler
+# Default: CB trading + ML standalone shadow (mặc định không cần tham số)
+python scanner.py
 
-# 2. Train + validate
-python -m ml.train_meta_label
+# Signal-only (không trade thật, chỉ xem signals)
+python scanner.py --no-trade
 
-# 3. Shadow mode (log predictions, KHÔNG veto)
-python scanner.py --ml-shadow --no-trade
+# Force ML standalone (explicit flag, same as default)
+python scanner.py --ml-standalone
+
+# Retrain standalone model (khi có thêm data)
+python -m ml.standalone_model
+
+# Run backtest experiments
+python -m ml.standalone_signals          # Full walk-forward all horizons
+python -m ml.compare_features            # OLD vs NEW features
+python -m ml.test_all_horizons           # Multi-horizon analysis
+python -m ml.missed_signals_analysis     # Analyze missed signals recent days
+
+# Meta-label (CB filter — currently ineffective)
+python -m ml.labeler                     # Generate dataset
+python -m ml.train_meta_label            # Train + validate
 ```
 
-### Kết quả validation hiện tại (2026-06-08)
+### Key Features (50 total)
 
-- Dataset: 222 trades, WR 75.2%, 128 ngày
-- OOS Fold: 1 fold duy nhất (165 train / 41 test)
-- **ML chưa thêm giá trị** — tất cả thresholds cho Net PnL < baseline
-- Lý do: CB WR quá cao (75%), chỉ 55 losers → ML khó phân biệt
-- Top features: atr_14, ret_13, vol_ratio, range_pct, adx, compression_depth
+**Original 35:** atr_14/5, bb_width/pos, rsi_14/3/7, stoch_k/d, macd_hist, adx, di+/-, ema_dist (8/21/50), ema_spread, ret_1/2/3/5/8/13, body/range/wick pct, vol_ratio, hour_sin/cos, is_pm
 
-### TODO — Công Việc Tiếp Theo
+**New 15 (from missed_signals_analysis):**
+- `ema_align` — EMA alignment score (-3 to +3), #2 importance
+- `stoch_rsi` — Stochastic RSI, more sensitive at extremes
+- `di_spread` — DI+ minus DI-, directional pressure
+- `range_ratio_3_10` — Squeeze detection (3-bar vs 10-bar range)
+- `macd_raw/signal_line/hist_raw` — Raw MACD values
+- `consec_up/down` — Consecutive candle direction count
+- `div_bearish/bullish` — RSI-Price momentum divergence
+- `kc_pos` — Keltner Channel position
+- `price_accel` — 2nd derivative of price
+- `weighted_ret_5` — Time-weighted recent momentum
+- `vol_spike_5` — Short-term volume spike
 
-1. **[ĐANG CHỜ] Shadow mode 10-15 ngày** — chạy `scanner.py --ml-shadow` song song live, thu thập predictions
-2. **[ĐANG CHỜ] Thêm data** — cần 300+ trades (thêm 2-3 tháng) để có 2+ OOS folds đáng tin
-3. **[CẦN LÀM] Thử LOOCV** — Nếu muốn validate nhanh hơn, sửa `train_meta_label.py` để chạy purged LOOCV trên toàn bộ 222 trades (code đã có, chỉ cần force call)
-4. **[CẦN LÀM] Thêm features từ data mới** — orderbook imbalance, foreign flow, basis (nếu có API)
-5. **[PHASE 2] Exit optimization** — ML predict optimal trail/BE per-trade (sau khi Phase 1 validated)
-6. **[PHASE 3] Standalone ML signals trên 1m** — Chờ 120+ ngày 1m data (~32,400 bars)
+### ML Findings Summary
 
-### Quyết Định Đã Chốt
+| Approach | Result | Status |
+|----------|--------|--------|
+| Meta-label (filter CB) | CB WR 75% too high, ML can't add value | PARKED |
+| Regime prediction | Marginal +4.2pts from skipping 6 bad sessions | PARKED |
+| Standalone ALL | Overlap 95% with CB, not orthogonal | INSIGHT |
+| **Standalone AM+SELL** | **WR 59.7%, PF 1.57, +1.41/day** | **SHADOW MODE** |
 
-- ML **augment** CB, KHÔNG replace
-- Shadow mode **bắt buộc** trước khi go live
-- Kill switch: auto-disable nếu ML-filtered PnL < unfiltered 10 ngày liên tục
-- Retrain monthly khi có đủ data mới
+### Quyết Định
 
-### Dependencies Bổ Sung (cho ML)
+- ML standalone chạy **song song** CB ở shadow mode
+- Mặc định bật khi chạy `scanner.py` (không cần flag)
+- Shadow mode: log signal qua Telegram, KHÔNG trade thật
+- Nếu 2-3 tuần shadow cho kết quả tốt → enable live trading
+- Retrain monthly: `python -m ml.standalone_model`
+- Kill switch: auto-disable nếu rolling WR < 40% over 20 signals
+
+### Dependencies
 
 ```bash
-pip install lightgbm scikit-learn
+pip install lightgbm scikit-learn pandas_ta
 ```
 
-Nếu không install LightGBM, code tự fallback sang ExtraTreesClassifier (sklearn built-in).
+LightGBM optional — code fallback sang ExtraTreesClassifier (sklearn built-in).

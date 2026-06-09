@@ -85,6 +85,19 @@ ml_filter:
   retrain_days: 30
   kill_switch_days: 10
 
+# Standalone ML signals (independent of CB)
+# Best config: H=6, thr=0.55, AM+SELL, 50 features
+# OOS: WR 59.7%, PF 1.57, +1.41 pts/day (60d walk-forward)
+ml_standalone:
+  enabled: false
+  shadow_mode: true
+  threshold: 0.55
+  horizon: 6
+  session_filter: [AM]
+  direction_filter: [SELL]
+  max_trades_per_session: 2
+  model_path: ml/models/standalone_ml_latest.pkl
+
 # ── Scanner-level params ──────────────────────────────────────────────────────
 combo_tf_map:
   CB:
