@@ -88,6 +88,7 @@ ml_filter:
 # Standalone ML signals (independent of CB)
 # Best config: H=6, thr=0.55, AM+SELL, 50 features
 # OOS: WR 59.7%, PF 1.57, +1.41 pts/day (60d walk-forward)
+# Post-ML filter: ema_align <= 0 → WR 68.4%, PF 1.71
 ml_standalone:
   enabled: false
   shadow_mode: true
@@ -97,6 +98,10 @@ ml_standalone:
   direction_filter: [SELL]
   max_trades_per_session: 2
   model_path: ml/models/standalone_ml_latest.pkl
+  post_ml_filters:
+    SELL:
+      ema_align_max: 0
+    BUY: null
 
 # ── Scanner-level params ──────────────────────────────────────────────────────
 combo_tf_map:

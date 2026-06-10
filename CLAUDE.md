@@ -235,9 +235,19 @@ ml/
 | Horizon | 6 bars (30 min) | Hold period |
 | Threshold | 0.55 | P(long) > 0.55 → BUY, P(long) < 0.45 → SELL |
 | Session filter | AM only | PM signals unprofitable |
-| Direction filter | SELL only | BUY signals weak |
-| OOS result | WR 59.7%, PF 1.57, +1.41 pts/day | 60d walk-forward |
-| Frequency | ~1.3 signals/day | Max 2 per session |
+| Direction filter | SELL only | BUY signals weak (WR 36%) |
+| Post-ML filter | SELL: ema_align <= 0 | Skip SELL when EMAs bullish |
+| OOS (unfiltered) | WR 59.2%, PF 1.66, +1.29 pts/day | 71 trades / 60d |
+| OOS (filtered) | WR 76.9%, PF 6.62, +0.71 pts/day | 13 trades / 60d |
+| Frequency | ~1 signal every 4-5 days (filtered) | High quality, low frequency |
+
+### Post-ML Filter Logic
+
+After ML predicts SELL (P(long) < 0.45), apply direction-specific filter:
+- **SELL:** require `ema_align <= 0` (EMAs not fully bullish). Rationale: 52% of losers sell into strong uptrends
+- **BUY:** disabled (AM BUY unprofitable even with best filter WR=42.9%)
+
+Filter configured in `strategy_config.yaml → ml_standalone.post_ml_filters`.
 
 ### Cách Chạy
 
@@ -259,6 +269,8 @@ python -m ml.standalone_signals          # Full walk-forward all horizons
 python -m ml.compare_features            # OLD vs NEW features
 python -m ml.test_all_horizons           # Multi-horizon analysis
 python -m ml.missed_signals_analysis     # Analyze missed signals recent days
+python -m ml.analyze_both_directions     # BUY+SELL analysis + post-ML filters
+python -m ml.backtest_filtered           # Verify filtered vs unfiltered performance
 
 # Meta-label (CB filter — currently ineffective)
 python -m ml.labeler                     # Generate dataset
@@ -289,7 +301,10 @@ python -m ml.train_meta_label            # Train + validate
 | Meta-label (filter CB) | CB WR 75% too high, ML can't add value | PARKED |
 | Regime prediction | Marginal +4.2pts from skipping 6 bad sessions | PARKED |
 | Standalone ALL | Overlap 95% with CB, not orthogonal | INSIGHT |
-| **Standalone AM+SELL** | **WR 59.7%, PF 1.57, +1.41/day** | **SHADOW MODE** |
+| Standalone AM+SELL (no filter) | WR 59.2%, PF 1.66, +1.29/day, 71 trades/60d | BASELINE |
+| **Standalone AM+SELL + ema<=0** | **WR 76.9%, PF 6.62, +0.71/day, 13 trades/60d** | **SHADOW MODE** |
+| Standalone AM+BUY | WR 36.2%, -0.57/day — unprofitable | DISABLED |
+| Standalone PM+BUY | WR 54.8%, +0.40/day — promising | MONITOR |
 
 ### Quyết Định
 

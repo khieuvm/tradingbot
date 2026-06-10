@@ -33,6 +33,10 @@ DEFAULT_STANDALONE_CONFIG = {
     "direction_filter": ["SELL"],
     "max_trades_per_session": 2,
     "model_path": str(MODEL_PATH),
+    "post_ml_filters": {
+        "SELL": {"ema_align_max": 0},
+        "BUY": None,
+    },
 }
 
 
@@ -49,6 +53,7 @@ class StandaloneMLSignal:
         self.direction_filter = cfg["direction_filter"]
         self.max_trades_per_session = cfg["max_trades_per_session"]
         self.model_path = Path(cfg["model_path"])
+        self.post_ml_filters = cfg.get("post_ml_filters", {})
 
         self._model = None
         self._features = FEATURE_COLS
@@ -159,6 +164,33 @@ class StandaloneMLSignal:
         if self.direction_filter and dir_str not in self.direction_filter:
             return None
 
+        # Post-ML filters (direction-specific conditions)
+        if self.post_ml_filters:
+            filt = self.post_ml_filters.get(dir_str)
+            if filt is None and dir_str in self.post_ml_filters:
+                return None
+            if filt:
+                if "ema_align_max" in filt:
+                    ema_align = float(row.get("ema_align", 0))
+                    if ema_align > filt["ema_align_max"]:
+                        return None
+                if "ema_align_min" in filt:
+                    ema_align = float(row.get("ema_align", 0))
+                    if ema_align < filt["ema_align_min"]:
+                        return None
+                if "di_spread_max" in filt:
+                    di_spread = float(row.get("di_spread", 0))
+                    if di_spread > filt["di_spread_max"]:
+                        return None
+                if "di_spread_min" in filt:
+                    di_spread = float(row.get("di_spread", 0))
+                    if di_spread < filt["di_spread_min"]:
+                        return None
+                if "macd_hist_min" in filt:
+                    macd_hist = float(row.get("macd_hist_raw", 0))
+                    if macd_hist < filt["macd_hist_min"]:
+                        return None
+
         # Signal generated
         self._last_signal_bar = idx
         self._session_trades[session_key] = self._session_trades.get(session_key, 0) + 1
@@ -172,6 +204,8 @@ class StandaloneMLSignal:
             "price": float(row["close"]),
             "atr": float(row.get("atr_14", 3.0)),
             "horizon": self.horizon,
+            "ema_align": float(row.get("ema_align", 0)),
+            "di_spread": float(row.get("di_spread", 0)),
         }
 
         if self.shadow_mode:
