@@ -13,12 +13,14 @@ import pandas as pd
 import numpy as np
 import pandas_ta as ta
 from datetime import datetime, timedelta, date
+from pathlib import Path
 
 from src.data_fetcher import DataFetcher
 from src.strategy_config import get_combo_config, get_session_params
 
 COST = 0.96
 CUTOFF_SHORT = date(2026, 5, 2)
+DATA_DIR = Path(__file__).parent.parent / "data"
 
 fetcher = DataFetcher()
 end = datetime.now().strftime("%Y-%m-%d")
@@ -40,6 +42,51 @@ def load(tf, days=180, cutoff=None):
     df['rsi14'] = ta.rsi(df['close'], length=14)
     df['session'] = np.where(df['mins']<12*60, 'AM', 'PM')
     df['range'] = df['high'] - df['low']
+    return df
+
+
+def load_parquet(tf, cutoff=None, start_date=None):
+    """Load data from parquet cache (much faster, longer history).
+
+    Args:
+        tf: Timeframe ("1m", "3m", "5m")
+        cutoff: Only keep data from this date onwards (date object)
+        start_date: Alternative to cutoff, string "YYYY-MM-DD"
+
+    Returns:
+        DataFrame with columns: time, open, high, low, close, volume, date, mins, atr, rsi14, session, range
+    """
+    parquet_file = DATA_DIR / f"vn30f1m_{tf}.parquet"
+    if not parquet_file.exists():
+        print(f"[WARN] Parquet not found: {parquet_file}. Falling back to API.")
+        days = 800 if tf == "5m" else 400
+        return load(tf, days=days, cutoff=cutoff)
+
+    df = pd.read_parquet(parquet_file)
+    df['time'] = pd.to_datetime(df['time'])
+    df = df.sort_values('time').reset_index(drop=True)
+    df['date'] = df['time'].dt.date
+    df['mins'] = df['time'].dt.hour * 60 + df['time'].dt.minute
+    df = df[((df['mins'] >= 9*60) & (df['mins'] < 11*60+30)) |
+            ((df['mins'] >= 13*60) & (df['mins'] < 14*60+30))]
+
+    if cutoff:
+        df = df[df['date'] >= cutoff]
+    if start_date:
+        from datetime import date as _d
+        if isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+        df = df[df['date'] >= start_date]
+
+    df = df.reset_index(drop=True)
+    df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+    df['rsi14'] = ta.rsi(df['close'], length=14)
+    df['session'] = np.where(df['mins'] < 12*60, 'AM', 'PM')
+    df['range'] = df['high'] - df['low']
+
+    days_count = df['date'].nunique()
+    print(f"[DATA] Loaded {tf} parquet: {len(df)} bars, {days_count} days "
+          f"({df['date'].iloc[0]} to {df['date'].iloc[-1]})")
     return df
 
 

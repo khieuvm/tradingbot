@@ -1,0 +1,142 @@
+[DATA] Loading 5m from parquet cache...
+[DATA] Loaded 5760 bars, 120 trading days
+[DATA] Date range: 2025-12-15 to 2026-06-12
+
+[STRATEGIES] Loading all strategies...
+[STRATEGIES] Loaded 22 strategies
+
+  Testing: fibonacci                  114 trades | WR 28.1% | PF 0.20 | PnL/d -3.87 (3.5s)
+  Testing: sr_horizontal               68 trades | WR 27.9% | PF 0.41 | PnL/d -2.10 (2.7s)
+  Testing: dynamic_sr                 324 trades | WR 24.7% | PF 0.23 | PnL/d -5.25 (0.5s)
+  Testing: trendlines                  92 trades | WR 43.5% | PF 0.53 | PnL/d -2.31 (3.1s)
+  Testing: nbar_breakout              160 trades | WR 35.6% | PF 0.59 | PnL/d -2.15 (0.8s)
+  Testing: reversal_patterns          326 trades | WR 32.2% | PF 0.43 | PnL/d -7.42 (2.5s)
+  Testing: candlestick                130 trades | WR 32.3% | PF 0.43 | PnL/d -2.61 (0.7s)
+  Testing: harmonic                     1 trades | WR 0.0% | PF 0.00 | PnL/d -0.66 (3.9s)
+  Testing: fvg                        316 trades | WR 30.1% | PF 0.31 | PnL/d -4.54 (0.3s)
+  Testing: orderblock                  26 trades | WR 30.8% | PF 0.17 | PnL/d -2.28 (0.4s)
+  Testing: market_structure           109 trades | WR 42.2% | PF 0.77 | PnL/d -0.95 (89.2s)
+  Testing: bos                         55 trades | WR 34.5% | PF 0.47 | PnL/d -2.49 (97.2s)
+  Testing: choch                       30 trades | WR 26.7% | PF 0.32 | PnL/d -2.33 (85.8s)
+  Testing: momentum_trend             242 trades | WR 53.7% | PF 0.79 | PnL/d -1.98 (0.6s)
+  Testing: oscillators                262 trades | WR 21.8% | PF 0.23 | PnL/d -5.42 (0.3s)
+  Testing: divergence                  59 trades | WR 37.3% | PF 0.48 | PnL/d -1.74 (1.2s)
+  Testing: volume                     584 trades | WR 44.5% | PF 0.60 | PnL/d -7.90 (1.1s)
+  Testing: heikin_ashi                 61 trades | WR 42.6% | PF 0.88 | PnL/d -0.46 (0.8s)
+  Testing: moon_phases                  9 trades | WR 66.7% | PF 3.02 | PnL/d +3.34 (0.4s)
+  Testing: renko                      290 trades | WR 35.9% | PF 0.58 | PnL/d -3.99 (0.5s)
+  Testing: elliott_wave                53 trades | WR 30.2% | PF 0.40 | PnL/d -3.66 (1.9s)
+  Testing: gann                        51 trades | WR 33.3% | PF 0.39 | PnL/d -1.88 (0.6s)
+
+================================================================================
+  VN30F1M STRATEGY BACKTEST REPORT - Timeframe: 5m
+================================================================================
+  Cost: 0.96 pts/trade | AM: 09:15-10:45 | PM: 13:15-14:15
+================================================================================
+
+#   Strategy               Trades     WR%      PF      PnL   PnL/d    MFE  Best
+--- ---------------------- ------ ------- ------- -------- ------- ------ -----
+ 1  moon_phases                 9   66.7%   3.02   +30.1  +3.34  12.3    AM
+ 2  heikin_ashi                61   42.6%   0.88   -24.6  -0.46   6.5    AM
+ 3  harmonic                    1    0.0%   0.00    -0.7  -0.66   7.8     -
+ 4  market_structure          109   42.2%   0.77   -82.0  -0.95   6.8     -
+ 5  divergence                 59   37.3%   0.48   -88.5  -1.74   5.9     -
+ 6  gann                       51   33.3%   0.39   -73.5  -1.88   4.4     -
+ 7  momentum_trend            242   53.7%   0.79  -168.3  -1.98   6.4     -
+ 8  sr_horizontal              68   27.9%   0.41   -92.2  -2.10   4.0     -
+ 9  nbar_breakout             160   35.6%   0.59  -210.7  -2.15   5.8     -
+ 10 orderblock                 26   30.8%   0.17   -52.4  -2.28   3.6     -
+ 11 trendlines                 92   43.5%   0.53  -138.8  -2.31   5.5     -
+ 12 choch                      30   26.7%   0.32   -67.5  -2.33   4.7     -
+ 13 bos                        55   34.5%   0.47  -114.4  -2.49   6.3     -
+ 14 candlestick               130   32.3%   0.43  -226.8  -2.61   4.9     -
+ 15 elliott_wave               53   30.2%   0.40  -153.8  -3.66   5.6     -
+ 16 fibonacci                 114   28.1%   0.20  -235.8  -3.87   3.7     -
+ 17 renko                     290   35.9%   0.58  -446.8  -3.99   6.2     -
+ 18 fvg                       316   30.1%   0.31  -522.1  -4.54   4.2     -
+ 19 dynamic_sr                324   24.7%   0.23  -614.4  -5.25   3.5     -
+ 20 oscillators               262   21.8%   0.23  -591.0  -5.42   3.8     -
+ 21 reversal_patterns         326   32.2%   0.43  -541.9  -7.42   5.1     -
+ 22 volume                    584   44.5%   0.60  -939.6  -7.90   5.2     -
+
+--------------------------------------------------------------------------------
+  [+] = PF > 1.3 AND trades >= 30 (statistically meaningful edge)
+--------------------------------------------------------------------------------
+
+
+================================================================================
+  TOP STRATEGIES -- AM/PM BREAKDOWN
+================================================================================
+
+  moon_phases (exit: trend)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:       9   66.7%   3.02   +30.1  +3.34  12.3
+       AM:       9   66.7%   3.02   +30.1  +3.34  12.3
+       PM:       0    0.0%   0.00    +0.0  +0.00   0.0
+    Exits: TRAIL:5, SESSION:3, SL:1
+
+  heikin_ashi (exit: trend)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:      61   42.6%   0.88   -24.6  -0.46   6.5
+       AM:      44   43.2%   1.12   +15.6  +0.39   7.1
+       PM:      17   41.2%   0.42   -40.2  -2.37   5.0
+    Exits: SESSION:33, SL:16, TRAIL:12
+
+  harmonic (exit: reversal)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:       1    0.0%   0.00    -0.7  -0.66   7.8
+       AM:       0    0.0%   0.00    +0.0  +0.00   0.0
+       PM:       1    0.0%   0.00    -0.7  -0.66   7.8
+    Exits: TRAIL:1
+
+  market_structure (exit: trend)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:     109   42.2%   0.77   -82.0  -0.95   6.8
+       AM:      83   43.4%   0.90   -28.9  -0.40   7.1
+       PM:      26   38.5%   0.39   -53.1  -2.13   5.9
+    Exits: SESSION:49, TRAIL:32, SL:28
+
+  divergence (exit: reversal)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:      59   37.3%   0.48   -88.5  -1.74   5.9
+       AM:      37   37.8%   0.48   -57.0  -1.68   6.0
+       PM:      22   36.4%   0.47   -31.5  -1.43   5.9
+    Exits: TRAIL:27, SL:21, SESSION:9, MAX_HOLD:2
+
+  gann (exit: mean_reversion)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:      51   33.3%   0.39   -73.5  -1.88   4.4
+       AM:      48   35.4%   0.42   -66.3  -1.74   4.4
+       PM:       3    0.0%   0.00    -7.2  -2.41   3.4
+    Exits: TRAIL:30, SL:17, MAX_HOLD:2, SESSION:2
+
+  momentum_trend (exit: trend)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:     242   53.7%   0.79  -168.3  -1.98   6.4
+       AM:     163   58.9%   0.97   -12.7  -0.17   6.4
+       PM:      79   43.0%   0.50  -155.6  -2.88   6.6
+    Exits: TRAIL:103, SESSION:89, SL:50
+
+  sr_horizontal (exit: mean_reversion)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:      68   27.9%   0.41   -92.2  -2.10   4.0
+       AM:      23   34.8%   0.57   -22.4  -1.18   4.8
+       PM:      45   24.4%   0.34   -69.8  -1.99   3.6
+    Exits: TRAIL:34, SL:28, SESSION:4, MAX_HOLD:2
+
+  nbar_breakout (exit: breakout)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:     160   35.6%   0.59  -210.7  -2.15   5.8
+       AM:      88   39.8%   0.72   -80.7  -1.05   6.3
+       PM:      72   30.6%   0.45  -130.0  -2.00   5.1
+    Exits: SL:55, TRAIL:53, SESSION:48, TP:3, MAX_HOLD:1
+
+  orderblock (exit: mean_reversion)
+            Trades     WR%      PF      PnL   PnL/d    MFE
+      ALL:      26   30.8%   0.17   -52.4  -2.28   3.6
+       AM:       8   37.5%   0.09   -17.7  -2.22   2.6
+       PM:      18   27.8%   0.21   -34.7  -2.04   4.1
+    Exits: TRAIL:12, SL:11, SESSION:2, MAX_HOLD:1
+
+
+[SAVED] Results -> strategies/results/backtest_5m_2026-06-13.json

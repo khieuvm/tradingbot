@@ -1,0 +1,345 @@
+[
+  {
+    "strategy": "momentum_trend",
+    "session": "PM",
+    "direction": "SELL",
+    "n_signals": 192,
+    "n_per_day": 0.28152492668621704,
+    "base_wr": 0.546875,
+    "base_pnl": 325.54002553498924,
+    "filter": {
+      "indicator": "ema8_5m",
+      "direction": "above",
+      "threshold": 1885.7625063826526,
+      "filtered_n": 106,
+      "filtered_wr": 0.6792452830188679,
+      "filtered_pnl": 416.2870685781334,
+      "keep_ratio": 0.5520833333333334,
+      "trades_per_day": 0.15542521994134897
+    }
+  },
+  {
+    "strategy": "momentum_trend",
+    "session": "PM",
+    "direction": "ALL",
+    "n_signals": 192,
+    "n_per_day": 0.28152492668621704,
+    "base_wr": 0.546875,
+    "base_pnl": 325.54002553498924,
+    "filter": {
+      "indicator": "ema8_5m",
+      "direction": "above",
+      "threshold": 1885.7625063826526,
+      "filtered_n": 106,
+      "filtered_wr": 0.6792452830188679,
+      "filtered_pnl": 416.2870685781334,
+      "keep_ratio": 0.5520833333333334,
+      "trades_per_day": 0.15542521994134897
+    }
+  },
+  {
+    "strategy": "momentum_trend",
+    "session": "PM",
+    "direction": "BUY",
+    "n_signals": 360,
+    "n_per_day": 0.5278592375366569,
+    "base_wr": 0.4666666666666667,
+    "base_pnl": 198.464744349567,
+    "filter": {
+      "indicator": "ema21_slope_5m",
+      "direction": "above",
+      "threshold": 0.0004271830121199019,
+      "filtered_n": 180,
+      "filtered_wr": 0.5777777777777777,
+      "filtered_pnl": 347.3662347724379,
+      "keep_ratio": 0.5,
+      "trades_per_day": 0.26392961876832843
+    }
+  },
+  {
+    "strategy": "macd_cross",
+    "session": "PM",
+    "direction": "BUY",
+    "n_signals": 128,
+    "n_per_day": 0.187683284457478,
+    "base_wr": 0.4921875,
+    "base_pnl": 177.6808704519267,
+    "filter": {
+      "indicator": "ema21_slope_5m",
+      "direction": "above",
+      "threshold": 0.00041292718649254477,
+      "filtered_n": 45,
+      "filtered_wr": 0.7777777777777778,
+      "filtered_pnl": 282.6810712594042,
+      "keep_ratio": 0.3515625,
+      "trades_per_day": 0.06598240469208211
+    }
+  },
+  {
+    "strategy": "macd_cross",
+    "session": "ALL",
+    "direction": "BUY",
+    "n_signals": 206,
+    "n_per_day": 0.3020527859237537,
+    "base_wr": 0.4368932038834951,
+    "base_pnl": 183.7014608166418,
+    "filter": {
+      "indicator": "ema8_slope_5m",
+      "direction": "above",
+      "threshold": 0.0006778104339332434,
+      "filtered_n": 62,
+      "filtered_wr": 0.6774193548387096,
+      "filtered_pnl": 277.53260947373656,
+      "keep_ratio": 0.30097087378640774,
+      "trades_per_day": 0.09090909090909091
+    }
+  },
+  {
+    "strategy": "momentum_trend",
+    "session": "ALL",
+    "direction": "SELL",
+    "n_signals": 555,
+    "n_per_day": 0.8137829912023461,
+    "base_wr": 0.45765765765765765,
+    "base_pnl": 175.2800836406362,
+    "filter": null
+  },
+  {
+    "strategy": "momentum_trend",
+    "session": "ALL",
+    "direction": "ALL",
+    "n_signals": 555,
+    "n_per_day": 0.8137829912023461,
+    "base_wr": 0.45765765765765765,
+    "base_pnl": 175.2800836406362,
+    "filter": null
+  },
+  {
+    "strategy": "fibonacci",
+    "session": "PM",
+    "direction": "SELL",
+    "n_signals": 225,
+    "n_per_day": 0.32991202346041054,
+    "base_wr": 0.37777777777777777,
+    "base_pnl": -177.57534262143975,
+    "filter": {
+      "indicator": "macd_hist_5m",
+      "direction": "above",
+      "threshold": 0.023744704024267288,
+      "filtered_n": 90,
+      "filtered_wr": 0.5333333333333333,
+      "filtered_pnl": 137.8083890641723,
+      "keep_ratio": 0.4,
+      "trades_per_day": 0.13196480938416422
+    }
+  },
+  {
+    "strategy": "fibonacci",
+    "session": "PM",
+    "direction": "ALL",
+    "n_signals": 225,
+    "n_per_day": 0.32991202346041054,
+    "base_wr": 0.37777777777777777,
+    "base_pnl": -177.57534262143975,
+    "filter": {
+      "indicator": "macd_hist_5m",
+      "direction": "above",
+      "threshold": 0.023744704024267288,
+      "filtered_n": 90,
+      "filtered_wr": 0.5333333333333333,
+      "filtered_pnl": 137.8083890641723,
+      "keep_ratio": 0.4,
+      "trades_per_day": 0.13196480938416422
+    }
+  },
+  {
+    "strategy": "macd_cross",
+    "session": "AM",
+    "direction": "SELL",
+    "n_signals": 104,
+    "n_per_day": 0.15249266862170088,
+    "base_wr": 0.47115384615384615,
+    "base_pnl": 65.19441873172552,
+    "filter": {
+      "indicator": "ll_5m",
+      "direction": "above",
+      "threshold": 1.0,
+      "filtered_n": 34,
+      "filtered_wr": 0.7058823529411765,
+      "filtered_pnl": 120.76864527118975,
+      "keep_ratio": 0.3269230769230769,
+      "trades_per_day": 0.04985337243401759
+    }
+  },
+  {
+    "strategy": "macd_cross",
+    "session": "AM",
+    "direction": "ALL",
+    "n_signals": 104,
+    "n_per_day": 0.15249266862170088,
+    "base_wr": 0.47115384615384615,
+    "base_pnl": 65.19441873172552,
+    "filter": {
+      "indicator": "ll_5m",
+      "direction": "above",
+      "threshold": 1.0,
+      "filtered_n": 34,
+      "filtered_wr": 0.7058823529411765,
+      "filtered_pnl": 120.76864527118975,
+      "keep_ratio": 0.3269230769230769,
+      "trades_per_day": 0.04985337243401759
+    }
+  },
+  {
+    "strategy": "heikin_ashi",
+    "session": "AM",
+    "direction": "SELL",
+    "n_signals": 125,
+    "n_per_day": 0.18328445747800587,
+    "base_wr": 0.504,
+    "base_pnl": 18.055524595760204,
+    "filter": {
+      "indicator": "macd_line_5m",
+      "direction": "below",
+      "threshold": 5.947820006402163,
+      "filtered_n": 100,
+      "filtered_wr": 0.56,
+      "filtered_pnl": 87.58505623927684,
+      "keep_ratio": 0.8,
+      "trades_per_day": 0.1466275659824047
+    }
+  },
+  {
+    "strategy": "heikin_ashi",
+    "session": "AM",
+    "direction": "ALL",
+    "n_signals": 125,
+    "n_per_day": 0.18328445747800587,
+    "base_wr": 0.504,
+    "base_pnl": 18.055524595760204,
+    "filter": {
+      "indicator": "macd_line_5m",
+      "direction": "below",
+      "threshold": 5.947820006402163,
+      "filtered_n": 100,
+      "filtered_wr": 0.56,
+      "filtered_pnl": 87.58505623927684,
+      "keep_ratio": 0.8,
+      "trades_per_day": 0.1466275659824047
+    }
+  },
+  {
+    "strategy": "heikin_ashi",
+    "session": "AM",
+    "direction": "BUY",
+    "n_signals": 133,
+    "n_per_day": 0.19501466275659823,
+    "base_wr": 0.3684210526315789,
+    "base_pnl": -121.62756943589604,
+    "filter": {
+      "indicator": "macd_signal_5m",
+      "direction": "above",
+      "threshold": 3.2274668468870664,
+      "filtered_n": 40,
+      "filtered_wr": 0.575,
+      "filtered_pnl": 76.33301740682342,
+      "keep_ratio": 0.3007518796992481,
+      "trades_per_day": 0.05865102639296188
+    }
+  },
+  {
+    "strategy": "fibonacci",
+    "session": "AM",
+    "direction": "SELL",
+    "n_signals": 210,
+    "n_per_day": 0.30791788856304986,
+    "base_wr": 0.4,
+    "base_pnl": -120.445112295218,
+    "filter": {
+      "indicator": "stoch_k_5m",
+      "direction": "above",
+      "threshold": 57.34049579862941,
+      "filtered_n": 63,
+      "filtered_wr": 0.5555555555555556,
+      "filtered_pnl": 71.4785152760965,
+      "keep_ratio": 0.3,
+      "trades_per_day": 0.09237536656891496
+    }
+  },
+  {
+    "strategy": "fibonacci",
+    "session": "AM",
+    "direction": "ALL",
+    "n_signals": 210,
+    "n_per_day": 0.30791788856304986,
+    "base_wr": 0.4,
+    "base_pnl": -120.445112295218,
+    "filter": {
+      "indicator": "stoch_k_5m",
+      "direction": "above",
+      "threshold": 57.34049579862941,
+      "filtered_n": 63,
+      "filtered_wr": 0.5555555555555556,
+      "filtered_pnl": 71.4785152760965,
+      "keep_ratio": 0.3,
+      "trades_per_day": 0.09237536656891496
+    }
+  },
+  {
+    "strategy": "macd_cross",
+    "session": "PM",
+    "direction": "SELL",
+    "n_signals": 111,
+    "n_per_day": 0.1627565982404692,
+    "base_wr": 0.4144144144144144,
+    "base_pnl": -27.158401659298182,
+    "filter": {
+      "indicator": "macd_signal_5m",
+      "direction": "below",
+      "threshold": -2.358358683929628,
+      "filtered_n": 39,
+      "filtered_wr": 0.5897435897435898,
+      "filtered_pnl": 71.04068975003275,
+      "keep_ratio": 0.35135135135135137,
+      "trades_per_day": 0.05718475073313783
+    }
+  },
+  {
+    "strategy": "macd_cross",
+    "session": "PM",
+    "direction": "ALL",
+    "n_signals": 111,
+    "n_per_day": 0.1627565982404692,
+    "base_wr": 0.4144144144144144,
+    "base_pnl": -27.158401659298182,
+    "filter": {
+      "indicator": "macd_signal_5m",
+      "direction": "below",
+      "threshold": -2.358358683929628,
+      "filtered_n": 39,
+      "filtered_wr": 0.5897435897435898,
+      "filtered_pnl": 71.04068975003275,
+      "keep_ratio": 0.35135135135135137,
+      "trades_per_day": 0.05718475073313783
+    }
+  },
+  {
+    "strategy": "macd_cross",
+    "session": "AM",
+    "direction": "BUY",
+    "n_signals": 78,
+    "n_per_day": 0.11436950146627566,
+    "base_wr": 0.34615384615384615,
+    "base_pnl": 6.020590364715497,
+    "filter": {
+      "indicator": "ema21_slope_5m",
+      "direction": "above",
+      "threshold": 0.0006747720925310109,
+      "filtered_n": 24,
+      "filtered_wr": 0.5416666666666666,
+      "filtered_pnl": 69.08294750209274,
+      "keep_ratio": 0.3076923076923077,
+      "trades_per_day": 0.03519061583577713
+    }
+  }
+]

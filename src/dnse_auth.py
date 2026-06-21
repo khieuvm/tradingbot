@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from config import Config
-from dnse import DnseClient
+from dnse.client import DnseClient
 
 VN_TZ = timezone(timedelta(hours=7))
 

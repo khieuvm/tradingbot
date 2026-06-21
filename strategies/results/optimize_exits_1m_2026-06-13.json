@@ -1,0 +1,59 @@
+[
+  {
+    "strategy": "momentum_trend",
+    "session_filter": "PM",
+    "direction_filter": "SELL",
+    "exit_params": {
+      "sl_mult": 2.5,
+      "trail_pts": 12.0,
+      "trail_mult": 1.0,
+      "tp_mult": null,
+      "be_trigger": null,
+      "trail_tighten_pts": null,
+      "trail_tighten_mult": null,
+      "max_hold": 50
+    },
+    "oos_pf": 2.0292132896613047,
+    "oos_wr": 58.333333333333336,
+    "oos_pnl_d": 5.233047498487307,
+    "oos_trades": 60
+  },
+  {
+    "strategy": "heikin_ashi",
+    "session_filter": "AM",
+    "direction_filter": "SELL",
+    "exit_params": {
+      "sl_mult": 1.5,
+      "trail_pts": 12.0,
+      "trail_mult": 1.0,
+      "tp_mult": null,
+      "be_trigger": null,
+      "trail_tighten_pts": null,
+      "trail_tighten_mult": null,
+      "max_hold": 50
+    },
+    "oos_pf": 1.2739797052808566,
+    "oos_wr": 45.45454545454545,
+    "oos_pnl_d": 0.6776076428711979,
+    "oos_trades": 33
+  },
+  {
+    "strategy": "macd_cross",
+    "session_filter": "AM",
+    "direction_filter": "SELL",
+    "exit_params": {
+      "sl_mult": 2.5,
+      "trail_pts": 12.0,
+      "trail_mult": 1.0,
+      "tp_mult": null,
+      "be_trigger": null,
+      "trail_tighten_pts": null,
+      "trail_tighten_mult": null,
+      "max_hold": 50
+    },
+    "oos_pf": 1.8169868220987124,
+    "oos_wr": 58.97435897435898,
+    "oos_pnl_d": 3.670137159922826,
+    "oos_trades": 39
+  }
+]

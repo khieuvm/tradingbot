@@ -1,6 +1,6 @@
 ---
-description: "Research new trading edges for VN30F1M from real data. Analyze patterns, indicators, compression zones, time effects."
-argument-hint: "<topic>"
+description: "Research new trading edges for VN30F1M from real data. Analyze patterns, indicators, compression zones, time effects, MTF filters, multi-strategy combos."
+argument-hint: "<topic: mtf|multi-strategy|htf-filter|all-combos|exit-tuning|...>"
 ---
 
 # Edge Researcher
@@ -15,6 +15,10 @@ $ARGUMENTS
 
 **Argument interpretation**:
 - If a topic is provided (e.g., `volume spikes`, `lunch break patterns`, `NR7`): research that specific edge
+- `mtf` or `htf-filter`: run MTF filter discovery → see `skills/mtf-filter-discovery/SKILL.md`
+- `multi-strategy` or `all-combos`: scan all strategy combos → see `skills/strategy-optimizer/SKILL.md`
+- `exit-tuning`: optimize exit params for a strategy → `python -m strategies.optimize_exits`
+- `signal-combine`: analyze signal overlap/contradiction → see `skills/signal-combiner/SKILL.md`
 - If empty: suggest research topics based on current gaps
 
 ## Execution Procedure

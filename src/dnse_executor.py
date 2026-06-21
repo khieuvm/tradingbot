@@ -11,7 +11,8 @@ Handles:
 
 from datetime import datetime, timedelta, timezone
 
-from dnse import DnseClient, BoardId
+from dnse.client import DnseClient
+from dnse.models import BoardId
 from dnse.resources.orders import PlaceOrderRequest
 
 from config import Config
@@ -90,7 +91,7 @@ class DnseExecutor:
                 f"Type: {order_type}"
             )
             print(f"  [ORDER] {dir_str} {quantity}x {symbol} @ {price_str} ({order_type})")
-            return {"order_id": response.order_id, "status": "placed"}
+            return {"order_id": response.id, "status": response.order_status}
         except Exception as e:
             self.notifier.send(f"\u274c <b>Order FAILED</b>\n{e}")
             print(f"  [ORDER ERROR] {e}")
@@ -116,7 +117,7 @@ class DnseExecutor:
             response = self.client.deals.list(
                 self.account_no, market_type=MARKET_TYPE
             )
-            return response.items if hasattr(response, 'items') else []
+            return response.deals if hasattr(response, 'deals') else []
         except Exception as e:
             print(f"  [POSITIONS ERROR] {e}")
             return []
@@ -129,7 +130,7 @@ class DnseExecutor:
                 market_type=MARKET_TYPE,
                 order_category=ORDER_CATEGORY,
             )
-            return response.items if hasattr(response, 'items') else []
+            return response.orders if hasattr(response, 'orders') else []
         except Exception as e:
             print(f"  [ORDERS ERROR] {e}")
             return []

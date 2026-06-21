@@ -51,20 +51,30 @@ Research sequence:
 
 | Script | Purpose |
 |--------|---------|
-| `research_mfe46.py` | Analyze MFE 4-6 pts reversal zone: features that predict fail vs continue |
-| `research_adaptive_exit.py` | Test adaptive exit at 4pts based on pre_move/ATR threshold |
-| `bt_adaptive_3tf.py` | Backtest adaptive exit on 1m/3m/5m |
-| `bt_trail_sweep.py` | Trail activation sweep (3/4/5 pts) + AM/PM time window analysis |
-| `debug_3m.py` / `debug_1m.py` | CB deep analysis on 3m/1m with SL breakdown |
+| `backtest/engine.py` | CB backtest engine (trail sweep, simulation) |
+| `ml/strategy_filter.py` | Walk-forward ML meta-labeling per strategy |
+| `ml/mtf_indicator_discovery.py` | HTF indicator discovery (5m signals + 15m filter) |
+| `ml/mtf_1m_with_5m.py` | HTF indicator discovery (1m signals + 5m filter) |
+| `ml/scan_all_1m_combos.py` | All 54 combos on 1m with auto-best 5m filter |
+| `ml/analyze_rejected.py` | Why ML rejected winners — false rejection analysis |
+| `ml/standalone_signals.py` | Standalone ML signals (50 features, walk-forward) |
+| `strategies/optimize_exits.py` | Exit parameter grid sweep (simulate_trade_fast) |
+| `strategies/backtest_new.py` | Multi-strategy backtest with load_data |
 
 ## Proven Edges Summary
 
-| Edge | TF | WR | PF | P/D | Status |
-|------|----|----|----|-----|--------|
-| CB 3-bar compression | 5m | 65.0% | 4.54 | +6.05 | **Production** |
-| CB + adaptive exit | 5m | 67.7% | 4.87 | +6.34 | **Apply now** |
-| CB 5-bar compression | 3m | 41.7% | 1.02 | +0.03 | Monitoring (24d only) |
-| CB 10-bar compression | 1m | 57.9% | 2.13 | +0.88 | Monitoring (24d only) |
+| Edge | TF | Session/Dir | WR | PF | P/D | Status |
+|------|----|------------|----|----|-----|--------|
+| CB 3-bar compression | 5m | ALL/ALL | 65.0% | 4.54 | +6.05 | **Production** |
+| CB + adaptive exit | 5m | ALL/ALL | 67.7% | 4.87 | +6.34 | **Production** |
+| momentum_trend + ema8_5m | 1m | PM/SELL | 68% | — | +0.61 | **Validated** |
+| momentum_trend + ema21_slope | 1m | PM/BUY | 58% | — | +0.51 | **Validated** |
+| macd_cross + ll_5m>=1 | 1m | AM/SELL | 71% | — | +0.18 | **Validated** |
+| macd_cross + ema21_slope | 1m | PM/BUY | 78% | — | +0.41 | **Validated** |
+| fibonacci + macd_hist_5m>0 | 1m | PM/SELL | 53% | — | +0.20 | **Validated** |
+| heikin_ashi + macd_line_5m<6 | 1m | AM/SELL | 56% | — | +0.13 | **Validated** |
+| market_structure + bb_pos_15m | 5m | ALL/BUY | 61% | — | — | Monitoring |
+| sr_horizontal + di_plus_15m | 5m | AM/SELL | 67% | — | — | Monitoring |
 
 See `references/proven_edges.md` for full detail.
 
@@ -191,3 +201,64 @@ Implementation: combos/<name>.py inheriting BaseCombo
 - `combos/cb.py` — CB reference implementation
 - `src/data_fetcher.py` — Data access (note API limits above)
 - `research/` — Place new analysis scripts here
+
+## Multi-Strategy Discovery
+
+Beyond CB, 7 strategies have been validated on 1m and 5m timeframes:
+
+```python
+ALL_STRATEGIES = [
+    ('market_structure', 'strategies.market_structure', 'MarketStructureStrategy'),
+    ('fibonacci', 'strategies.fibonacci', 'FibonacciStrategy'),
+    ('sr_horizontal', 'strategies.sr_horizontal', 'SRHorizontalStrategy'),
+    ('heikin_ashi', 'strategies.heikin_ashi', 'HeikinAshiStrategy'),
+    ('reversal_patterns', 'strategies.reversal_patterns', 'ReversalPatternsStrategy'),
+    ('momentum_trend', 'strategies.momentum_trend', 'MomentumTrendStrategy'),
+    ('macd_cross', 'strategies.macd_cross', 'MACDCrossStrategy'),
+]
+```
+
+Each strategy is tested across 3 sessions (AM/PM/ALL) x 3 directions (BUY/SELL/ALL) = 9 combos.
+
+**CLI to scan all:**
+```bash
+python -m ml.scan_all_1m_combos    # 1m with best 5m filter
+```
+
+## MTF Filtering Approach
+
+After finding a profitable combo, the NEXT research step is always: can a higher-timeframe filter improve it?
+
+- **For 1m strategies:** look at 5m indicators (5:1 ratio)
+- **For 5m strategies:** look at 15m indicators (3:1 ratio)
+
+This outperforms ML because: 1 interpretable rule < 50-feature model that overfits.
+
+See `skills/mtf-filter-discovery/SKILL.md` for full methodology.
+
+## Per-Strategy Exit Tuning
+
+Each strategy has different failure modes:
+- **market_structure:** 46% EXIT TOO LATE, 61% NO MOMENTUM → needs BE + short max_hold
+- **fibonacci:** 56% NO MOMENTUM → needs short max_hold
+- **sr_horizontal:** 35% FALSE SIGNAL → needs tighter SL + ADX cap (works in ranges)
+- **heikin_ashi:** 67% NO MOMENTUM → needs very short max_hold (12 bars)
+- **momentum_trend:** 38% EXIT TOO LATE → needs BE + trail tighten
+- **macd_cross:** 47% EXIT TOO LATE → needs very early BE (MFE avg of losses = 3.4)
+
+Exit presets from `strategies/optimize_exits.py`: trend, trend_tight, mean_reversion, breakout, reversal, scalp.
+
+## Stagnation Detection
+
+**GATE:** Have you tested 3+ parameter variations with < 0.05 PF improvement?
+
+- **YES** -> **STOP TUNING.** You've hit a local optimum. Pivot structurally:
+  - Try a different HTF indicator
+  - Try a different exit type (e.g., fixed TP instead of trail)
+  - Try a different timeframe
+  - Try combining with another strategy signal (confluence)
+  - Consider abandoning this combo entirely
+
+- **NO** -> Continue optimization, there's still room to improve.
+
+This prevents spending hours on diminishing returns. Document the plateau in `references/anti_patterns.md`.

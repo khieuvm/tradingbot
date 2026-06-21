@@ -1,0 +1,46 @@
+{
+  "config": {
+    "train_days": 0,
+    "test_days": 60,
+    "embargo_bars": 14,
+    "features": 50
+  },
+  "results": [
+    {
+      "model_type": "et_fs",
+      "threshold": 0.5,
+      "n_folds": 3,
+      "unfiltered_n": 135,
+      "unfiltered_wr": 58.51851851851851,
+      "unfiltered_pf": 1.7429745514030663,
+      "unfiltered_pnl": 286.05337678363173,
+      "filtered_n": 44,
+      "filtered_wr": 63.63636363636363,
+      "filtered_pf": 1.8008207593228989,
+      "filtered_pnl": 88.37556800558832,
+      "keep_ratio": 0.32592592592592595,
+      "score": 12997.36153934304,
+      "pnl_per_day": 0.490975377808824,
+      "strategy": "momentum_trend"
+    },
+    {
+      "model_type": "agreement_fs",
+      "threshold": 0.4,
+      "n_folds": 2,
+      "unfiltered_n": 57,
+      "unfiltered_wr": 45.614035087719294,
+      "unfiltered_pf": 1.137568837546042,
+      "unfiltered_pnl": 21.038405829390733,
+      "filtered_n": 41,
+      "filtered_wr": 51.21951219512195,
+      "filtered_pf": 1.4721304820933285,
+      "filtered_pnl": 43.199147305189506,
+      "keep_ratio": 0.7192982456140351,
+      "score": 10547.915199128205,
+      "pnl_per_day": 0.35999289420991254,
+      "strategy": "macd_cross"
+    }
+  ],
+  "total_unfiltered_pnl": 307.0917826130225,
+  "total_filtered_pnl": 131.57471531077783
+}

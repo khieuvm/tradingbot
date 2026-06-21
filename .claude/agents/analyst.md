@@ -229,6 +229,22 @@ VERDICT:
 3. Compare to random baseline
 4. If MFE significantly higher: integrate as CB filter candidate
 
+## Multi-Strategy Signal Sources
+
+Beyond CB, 7 strategies produce independent signals:
+
+| Strategy | Best Combo | WR | Notes |
+|----------|-----------|-----|-------|
+| momentum_trend | PM/SELL + ema8_5m | 68% | EOD positioning flow |
+| macd_cross | PM/BUY + ema21_slope | 78% | Momentum continuation |
+| macd_cross | AM/SELL + ll_5m>=1 | 71% | Lower-low confirmation |
+| fibonacci | PM/SELL + macd_hist_5m | 53% | Retracement exhaustion |
+| heikin_ashi | AM/SELL + macd_line_5m | 56% | Smoothed trend |
+| market_structure | ALL/BUY + bb_pos_15m | 61% | Structural break |
+| sr_horizontal | AM/SELL + di_plus_15m | 67% | Range boundary |
+
+When analyzing multi-strategy overlap or contradictions, see `skills/signal-combiner/SKILL.md` for deduplication rules, conviction scoring, and contradiction resolution.
+
 ## Key Principles
 
 1. **Always measure against random baseline** — "pattern MFE 5.2 pts" means nothing without comparison
@@ -238,3 +254,4 @@ VERDICT:
 5. **Avoid overfitting** — if a pattern only appears 5 times, it's not tradeable
 6. **Cost-aware** — any combo must still work after -0.96 pts/trade
 7. **Combo not chaos** — test ONE new thing vs baseline, not 5 changes at once
+8. **Signal deduplication** — when analyzing multi-strategy signals, same direction within 5 bars = one signal

@@ -36,8 +36,15 @@ from src.position_manager import PositionManager
 from src.trade_logger import TradeLogger
 from src.dnse_auth import create_authenticated_client
 from src.dnse_executor import DnseExecutor
+try:
+    from src.dnse_stream import DnseStream
+except Exception:
+    DnseStream = None
 from ml.model import MLFilter
 from ml.standalone_model import StandaloneMLSignal
+from src.day_trend import DayTrendPredictor
+from strategies.shadow_scanner import StrategyShadowScanner
+from strategies.shadow_tracker import ShadowTracker
 
 # --- CONFIG ---------------------------------------------------------------
 from src.strategy_config import get_config, get_combo_config, get_session_params
@@ -232,7 +239,11 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
              portfolio_mgr: PortfolioManager | None = None,
              pending_signals: dict | None = None,
              ml_filter: MLFilter | None = None,
-             standalone_ml: StandaloneMLSignal | None = None):
+             standalone_ml: StandaloneMLSignal | None = None,
+             shadow_scanner: StrategyShadowScanner | None = None,
+             shadow_tracker: ShadowTracker | None = None,
+             stream: DnseStream | None = None,
+             day_trend: DayTrendPredictor | None = None):
     """One CB scan cycle: detect compression, queue pending, confirm on breakout, enter."""
     global _last_regime, _cb_last_signal_time, _nr4_last_signal_time
 
@@ -275,13 +286,22 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
     df_5m = None
     df_3m = None
     df_15m = None
-    try:
-        df_5m = fetcher.get_futures_ohlcv(
-            SYMBOL, (_now - timedelta(days=5)).strftime("%Y-%m-%d"),
-            _now.strftime("%Y-%m-%d"), interval="5m",
-        )
-    except Exception as e:
-        print(f"  [5m] Fetch error: {e}")
+
+    # Try stream first (real-time WebSocket), fall back to vnstock polling
+    if stream and stream.is_running:
+        df_5m = stream.get_ohlcv("5m")
+        if df_5m is not None:
+            print(f"  [DATA] 5m from stream ({stream.bar_count('5m')} bars)")
+
+    if df_5m is None:
+        try:
+            df_5m = fetcher.get_futures_ohlcv(
+                SYMBOL, (_now - timedelta(days=5)).strftime("%Y-%m-%d"),
+                _now.strftime("%Y-%m-%d"), interval="5m",
+            )
+        except Exception as e:
+            print(f"  [5m] Fetch error: {e}")
+
     try:
         df_3m = fetcher.get_futures_ohlcv(
             SYMBOL, (_now - timedelta(days=3)).strftime("%Y-%m-%d"),
@@ -307,6 +327,10 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
     volatile = regime_info["regime"] == "VOLATILE"
     if volatile:
         print(f"  [REGIME] VOLATILE — skip CB entries")
+
+    # --- Day Trend Predictor update (9:30 pulse + 9:45 retracement) ---
+    if day_trend:
+        day_trend.update(df_5m, vn_now())
 
     # --- CB compression detection (last complete 5m bar) ---
     cb_sig = None
@@ -524,6 +548,13 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                 if not ml_result["should_enter"]:
                     continue
 
+            # Day Trend bias filter (block entries opposing predicted direction)
+            if day_trend and day_trend.should_filter(direction_int):
+                pred = day_trend.get_prediction()
+                print(f"  [DAY_TREND] {combo_name}/{direction} blocked "
+                      f"(bias={pred['action'] if pred else 'N/A'}, conf={pred['confidence'] if pred else 'N/A'})")
+                continue
+
             if portfolio_mgr.should_flip(direction_int, "5m", 1):
                 portfolio_mgr.execute_flip(current_price)
 
@@ -557,6 +588,108 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                     )
         except Exception as e:
             print(f"  [ML-Standalone] Error: {e}")
+
+    # --- Day Trend Independent Signal (9:45 entry on large pulse + shallow retrace) ---
+    if day_trend:
+        dt_signal = day_trend.get_signal()
+        if dt_signal:
+            dt_dir = dt_signal["direction_str"]
+            print(f"  [DAY_TREND] Signal: {dt_dir} | pulse={dt_signal['pulse_pts']:+.1f} "
+                  f"| retrace={dt_signal['retrace_pct']:.0f}% | conf={dt_signal['confidence']}")
+            if day_trend.shadow_mode:
+                notifier.send(
+                    f"\U0001f4ca <b>[DayTrend Shadow] {dt_dir}</b>\n"
+                    f"Pulse: {dt_signal['pulse_pts']:+.1f} pts | Retrace: {dt_signal['retrace_pct']:.0f}%\n"
+                    f"Entry: {dt_signal['entry']:.1f} | SL: {dt_signal['sl']:.1f} | TP: {dt_signal['tp']:.1f}\n"
+                    f"<i>Shadow mode — not trading</i>"
+                )
+            elif portfolio_mgr:
+                _now_dt = vn_now()
+                _mins_dt = _now_dt.hour * 60 + _now_dt.minute
+                _in_am_dt = _mins_dt < 11 * 60 + 30
+                _dt_entry_ok = (
+                    (_in_am_dt and _mins_dt < 11 * 60 + 25) or
+                    (not _in_am_dt and 13 * 60 <= _mins_dt < 14 * 60 + 15)
+                )
+                if _dt_entry_ok and portfolio_mgr.can_open(dt_signal["direction"]):
+                    portfolio_mgr.open_position(
+                        symbol=SYMBOL,
+                        direction=dt_signal["direction"],
+                        entry_price=dt_signal["entry"],
+                        atr=dt_signal["atr"],
+                        combo="DT",
+                        timeframe="5m",
+                        confidence=2,
+                        pre_move_ratio=0.0,
+                    )
+                elif not _dt_entry_ok:
+                    print(f"  [DAY_TREND] Time cutoff — no entry after {'11:25' if _in_am_dt else '14:15'}")
+
+        # PM reversal monitoring
+        if df_5m is not None:
+            day_trend.check_pm_reversal(df_5m)
+
+    # --- Shadow Strategy Scanner (1m/3m/5m profitable strategies) ---
+    if shadow_scanner:
+        try:
+            # Check exits for pending shadow signals
+            if shadow_tracker and shadow_tracker.pending_count > 0:
+                _now_st = vn_now()
+                _mins_st = _now_st.hour * 60 + _now_st.minute
+                _current_price = float(df_5m.iloc[-1]["close"]) if df_5m is not None and len(df_5m) > 0 else 0
+                if _current_price > 0:
+                    resolved = shadow_tracker.check_exits(_current_price, _mins_st)
+                    for r in resolved:
+                        print(f"  [SHADOW-EXIT] {r['strategy']} {r['direction']} "
+                              f"exit={r['exit_reason']} PnL={r['pnl']:+.1f}")
+
+            # 1m scan: try stream first, then vnstock
+            _df_1m = None
+            if stream and stream.is_running:
+                _df_1m = stream.get_ohlcv("1m")
+            if _df_1m is None:
+                try:
+                    _df_1m = fetcher.get_futures_ohlcv(
+                        SYMBOL, (_now - timedelta(days=3)).strftime("%Y-%m-%d"),
+                        _now.strftime("%Y-%m-%d"), interval="1m")
+                except Exception:
+                    pass
+            if _df_1m is not None:
+                for sig in shadow_scanner.scan_1m(_df_1m):
+                    alert_key = f"SHADOW_{sig['strategy']}_{sig['time']}"
+                    if alert_key not in sent_alerts:
+                        sent_alerts[alert_key] = time.time()
+                        msg = shadow_scanner.format_telegram_alert(sig)
+                        notifier.send(msg)
+                        print(f"  [SHADOW] {sig['label']} {sig['direction']} @ {sig['price']:.1f}")
+                        if shadow_tracker:
+                            shadow_tracker.log_signal(sig)
+
+            # 3m scan
+            if df_3m is not None:
+                for sig in shadow_scanner.scan_3m(df_3m):
+                    alert_key = f"SHADOW_{sig['strategy']}_{sig['time']}"
+                    if alert_key not in sent_alerts:
+                        sent_alerts[alert_key] = time.time()
+                        msg = shadow_scanner.format_telegram_alert(sig)
+                        notifier.send(msg)
+                        print(f"  [SHADOW] {sig['label']} {sig['direction']} @ {sig['price']:.1f}")
+                        if shadow_tracker:
+                            shadow_tracker.log_signal(sig)
+
+            # 5m scan
+            if df_5m is not None:
+                for sig in shadow_scanner.scan_5m(df_5m):
+                    alert_key = f"SHADOW_{sig['strategy']}_{sig['time']}"
+                    if alert_key not in sent_alerts:
+                        sent_alerts[alert_key] = time.time()
+                        msg = shadow_scanner.format_telegram_alert(sig)
+                        notifier.send(msg)
+                        print(f"  [SHADOW] {sig['label']} {sig['direction']} @ {sig['price']:.1f}")
+                        if shadow_tracker:
+                            shadow_tracker.log_signal(sig)
+        except Exception as e:
+            print(f"  [SHADOW] Error: {e}")
 
     if not any_signal and not pending_signals:
         status = portfolio_mgr.status_str() if portfolio_mgr else "N/A"
@@ -671,10 +804,66 @@ def main():
         print(f"[ML-Standalone] Active ({mode_str}), thr={standalone_ml.threshold:.2f}, "
               f"filter={standalone_ml.session_filter}+{standalone_ml.direction_filter}")
 
+    # --- Day Trend Predictor (Opening Pulse 9:00-9:30 + Retracement 9:45) ---
+    dt_cfg = get_config().get("day_trend", {})
+    day_trend = None
+    if dt_cfg.get("enabled"):
+        day_trend = DayTrendPredictor(notifier=notifier)
+        mode_str = "SHADOW" if day_trend.shadow_mode else "LIVE"
+        print(f"[DAY_TREND] Active ({mode_str}), pulse_min={day_trend.pulse_min_pts}, "
+              f"bias_filter={'ON' if day_trend.enable_bias_filter else 'OFF'}, "
+              f"signal={'ON' if day_trend.enable_signal else 'OFF'}")
+
+    # --- Strategy Shadow Scanner (1m/3m/5m profitable strategies) ---
+    shadow_tracker = None
+    try:
+        shadow_scanner = StrategyShadowScanner()
+        shadow_tracker = ShadowTracker()
+        print(f"[SHADOW] Strategy scanner active: "
+              f"{len(shadow_scanner._strategies_1m)} x 1m, "
+              f"{len(shadow_scanner._strategies_3m)} x 3m, "
+              f"{len(shadow_scanner._strategies_5m)} x 5m + confluence")
+        if shadow_tracker.pending_count > 0:
+            print(f"[SHADOW] Tracker: {shadow_tracker.pending_count} pending signals from today")
+    except Exception as e:
+        print(f"[SHADOW] Init failed: {e}. Shadow scanning disabled.")
+        shadow_scanner = None
+
+    # --- DNSE WebSocket Stream (real-time OHLC + trades) ---
+    stream = None
+    try:
+        if DnseStream and Config.DNSE_API_KEY and Config.DNSE_API_SECRET:
+            import threading
+            init_result = [None]
+            def _init_stream():
+                try:
+                    init_result[0] = DnseStream()
+                except Exception:
+                    pass
+            t = threading.Thread(target=_init_stream, daemon=True)
+            t.start()
+            t.join(timeout=10)
+            if init_result[0] is not None:
+                stream = init_result[0]
+                if stream.start(timeout=10):
+                    print(f"[STREAM] Connected. Buffering bars...")
+                else:
+                    print("[STREAM] Connection failed. Using vnstock polling.")
+                    stream = None
+            else:
+                print("[STREAM] Init timeout. Using vnstock polling.")
+        else:
+            print("[STREAM] Disabled or no credentials. Using vnstock polling.")
+    except Exception as e:
+        print(f"[STREAM] Init failed: {e}. Using vnstock polling.")
+        stream = None
+
     if args.once:
         run_scan(fetcher, notifier, sent_alerts, position_manager,
                  portfolio_mgr=portfolio_manager, pending_signals=pending_signals,
-                 ml_filter=ml_filter, standalone_ml=standalone_ml)
+                 ml_filter=ml_filter, standalone_ml=standalone_ml,
+                 shadow_scanner=shadow_scanner, shadow_tracker=shadow_tracker,
+                 stream=stream, day_trend=day_trend)
         return
 
     notifier.send(
@@ -710,6 +899,12 @@ def main():
                 summary = trade_logger.daily_summary(today_str)
                 notifier.send(summary)
                 print(f"[EOD] Summary sent for {today_str}")
+                if shadow_tracker:
+                    shadow_report = shadow_tracker.format_stats_report()
+                    notifier.send(shadow_report)
+                    print(f"[EOD] Shadow tracker report sent")
+                if day_trend:
+                    day_trend.reset()
 
             if not is_trading_hours():
                 print(f"\r[{now.strftime('%H:%M:%S')}] Outside trading hours.", end="")
@@ -718,30 +913,55 @@ def main():
 
             # Fast loop: position SL/TP update every SCAN_INTERVAL (10s)
             if portfolio_manager.n_open > 0:
+                _price_updated = False
                 try:
-                    _now_f = vn_now()
-                    _df_fast = fetcher.get_futures_ohlcv(
-                        SYMBOL,
-                        (_now_f - timedelta(days=1)).strftime("%Y-%m-%d"),
-                        _now_f.strftime("%Y-%m-%d"),
-                        interval="1m",
-                    )
-                    if _df_fast is not None and len(_df_fast) > 14:
-                        import pandas_ta as _ta_fast
-                        _atr_s = _ta_fast.atr(_df_fast["high"], _df_fast["low"],
-                                              _df_fast["close"], length=14)
-                        _atr = float(_atr_s.iloc[-1]) if (
-                            _atr_s is not None and pd.notna(_atr_s.iloc[-1])
-                        ) else 3.5
-                        _last = _df_fast.iloc[-1]
-                        portfolio_manager.update_prices(
+                    # Try stream for instant price (no API call)
+                    _stream_price = stream.get_latest_price() if stream and stream.is_running else None
+                    if _stream_price is not None:
+                        _df_fast_stream = stream.get_ohlcv("1m") if stream else None
+                        if _df_fast_stream is not None and len(_df_fast_stream) > 14:
+                            import pandas_ta as _ta_fast
+                            _atr_s = _ta_fast.atr(_df_fast_stream["high"], _df_fast_stream["low"],
+                                                  _df_fast_stream["close"], length=14)
+                            _atr = float(_atr_s.iloc[-1]) if (
+                                _atr_s is not None and pd.notna(_atr_s.iloc[-1])
+                            ) else 3.5
+                            _last = _df_fast_stream.iloc[-1]
+                            portfolio_manager.update_prices(
+                                SYMBOL,
+                                high=float(_last["high"]),
+                                low=float(_last["low"]),
+                                close=_stream_price,
+                                atr=_atr,
+                                regime=_last_regime,
+                            )
+                            _price_updated = True
+
+                    if not _price_updated:
+                        # Fallback: fetch 1m from vnstock
+                        _now_f = vn_now()
+                        _df_fast = fetcher.get_futures_ohlcv(
                             SYMBOL,
-                            high=float(_last["high"]),
-                            low=float(_last["low"]),
-                            close=float(_last["close"]),
-                            atr=_atr,
-                            regime=_last_regime,
+                            (_now_f - timedelta(days=1)).strftime("%Y-%m-%d"),
+                            _now_f.strftime("%Y-%m-%d"),
+                            interval="1m",
                         )
+                        if _df_fast is not None and len(_df_fast) > 14:
+                            import pandas_ta as _ta_fast
+                            _atr_s = _ta_fast.atr(_df_fast["high"], _df_fast["low"],
+                                                  _df_fast["close"], length=14)
+                            _atr = float(_atr_s.iloc[-1]) if (
+                                _atr_s is not None and pd.notna(_atr_s.iloc[-1])
+                            ) else 3.5
+                            _last = _df_fast.iloc[-1]
+                            portfolio_manager.update_prices(
+                                SYMBOL,
+                                high=float(_last["high"]),
+                                low=float(_last["low"]),
+                                close=float(_last["close"]),
+                                atr=_atr,
+                                regime=_last_regime,
+                            )
                 except Exception as _e:
                     print(f"  [FAST UPDATE ERROR] {_e}")
                 portfolio_manager.tick()
@@ -751,7 +971,9 @@ def main():
                 _last_full_scan = time.time()
                 run_scan(fetcher, notifier, sent_alerts, position_manager,
                          portfolio_mgr=portfolio_manager, pending_signals=pending_signals,
-                         ml_filter=ml_filter, standalone_ml=standalone_ml)
+                         ml_filter=ml_filter, standalone_ml=standalone_ml,
+                         shadow_scanner=shadow_scanner, shadow_tracker=shadow_tracker,
+                         stream=stream, day_trend=day_trend)
 
         except KeyboardInterrupt:
             print("\nStopped by user.")

@@ -1,10 +1,12 @@
 """
 Data fetcher module - Lấy dữ liệu từ DNSE API và vnstock
 Hỗ trợ: Cổ phiếu, Phái sinh (Futures/VN30F), Index, ETF
+Providers: KBS (default, fast), VCI (longer history ~3 years)
 """
 import pandas as pd
 from vnstock import Market, Quote, Reference
-from dnse import DnseClient, DnseMarketStream, BoardId
+from dnse.client import DnseClient
+from dnse.models import BoardId
 
 from config import Config
 
@@ -18,19 +20,31 @@ class DataFetcher:
         "1H": 5, "1D": 1, "1W": 0.2, "1M": 0.05,
     }
 
-    def __init__(self):
+    # KBS: ~8 months max. VCI: ~3 years max.
+    _MAX_COUNT = {"KBS": 15000, "VCI": 500000}
+
+    def __init__(self, provider: str = "KBS"):
+        """
+        Args:
+            provider: "KBS" (default, fast, ~8 months) or "VCI" (slower, ~3 years history)
+        """
+        self._provider = provider.upper()
         self.market = Market()
         self.reference = Reference()
 
+    @property
+    def provider(self) -> str:
+        return self._provider
+
     @staticmethod
-    def _calc_count(start: str, end: str, interval: str) -> int:
+    def _calc_count(start: str, end: str, interval: str, provider: str = "KBS") -> int:
         """Tính số lượng nến cần fetch dựa vào khoảng thời gian và interval."""
         from datetime import datetime
         days = (datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(start, "%Y-%m-%d")).days + 1
         cpd = DataFetcher._CANDLES_PER_DAY.get(interval, 1)
-        # Trading days ~ 70% of calendar days
         count = int(days * 0.72 * cpd) + 50
-        return min(max(count, 100), 5000)
+        max_count = DataFetcher._MAX_COUNT.get(provider, 15000)
+        return min(max(count, 100), max_count)
 
     def get_historical_ohlcv(self, symbol: str, start: str, end: str, interval: str = "1D") -> pd.DataFrame:
         """Lấy dữ liệu OHLCV lịch sử từ vnstock
@@ -41,8 +55,13 @@ class DataFetcher:
             end: Ngày kết thúc "YYYY-MM-DD"
             interval: Khung thời gian ("1D", "1W", "1M")
         """
-        count = self._calc_count(start, end, interval)
-        df = self.market.equity(symbol).ohlcv(start=start, end=end, interval=interval, count=count)
+        count = self._calc_count(start, end, interval, self._provider)
+        df = self.market.equity(symbol).ohlcv(
+            start=start, end=end, interval=interval, count=count,
+            source=self._provider.lower(),
+        )
+        if self._provider == "VCI" and df is not None and not df.empty:
+            df = self._filter_trading_hours(df)
         return df
 
     # === PHÁI SINH (FUTURES) ===
@@ -62,14 +81,18 @@ class DataFetcher:
                       Nếu interval không được hỗ trợ bởi API (ví dụ "3m"),
                       sẽ tự động fetch "1m" rồi resample.
         """
-        # Intervals that need to be resampled from 1m
         _RESAMPLE_FROM_1M = {"3m", "2m", "4m", "10m"}
         if interval in _RESAMPLE_FROM_1M:
             tf_min = int(interval.rstrip("m"))
             df1m = self.get_futures_ohlcv(symbol, start, end, interval="1m")
             return self._resample_ohlcv(df1m, tf_min)
-        count = self._calc_count(start, end, interval)
-        df = self.market.futures(symbol).ohlcv(start=start, end=end, interval=interval, count=count)
+        count = self._calc_count(start, end, interval, self._provider)
+        df = self.market.futures(symbol).ohlcv(
+            start=start, end=end, interval=interval, count=count,
+            source=self._provider.lower(),
+        )
+        if self._provider == "VCI" and df is not None and not df.empty and interval != "1D":
+            df = self._filter_trading_hours(df)
         return df
 
     @staticmethod
@@ -93,6 +116,22 @@ class DataFetcher:
                      ((mins >= 13 * 60) & (mins < 14 * 60 + 30))
         return resampled[in_session].reset_index(drop=True)
 
+    @staticmethod
+    def _filter_trading_hours(df: pd.DataFrame) -> pd.DataFrame:
+        """Filter VCI data to VN trading hours only (VCI returns 24h data)."""
+        if df is None or df.empty:
+            return df
+        df = df.copy()
+        df = df.dropna(subset=["open", "high", "low", "close"]).reset_index(drop=True)
+        if "time" in df.columns:
+            df["time"] = pd.to_datetime(df["time"])
+            mins = df["time"].dt.hour * 60 + df["time"].dt.minute
+        else:
+            return df
+        in_session = ((mins >= 9 * 60) & (mins < 11 * 60 + 30)) | \
+                     ((mins >= 13 * 60) & (mins < 14 * 60 + 30))
+        return df[in_session].reset_index(drop=True)
+
     def get_futures_info(self, symbol: str = "VN30F1M") -> dict:
         """Lấy thông tin chi tiết hợp đồng phái sinh"""
         return self.reference.futures.info()
@@ -105,8 +144,11 @@ class DataFetcher:
         Args:
             symbol: Mã chỉ số (e.g., "VNINDEX", "VN30", "HNX30")
         """
-        count = self._calc_count(start, end, interval)
-        df = self.market.index(symbol).ohlcv(start=start, end=end, interval=interval, count=count)
+        count = self._calc_count(start, end, interval, self._provider)
+        df = self.market.index(symbol).ohlcv(
+            start=start, end=end, interval=interval, count=count,
+            source=self._provider.lower(),
+        )
         return df
 
     def get_index_list(self) -> pd.DataFrame:
@@ -115,7 +157,7 @@ class DataFetcher:
 
     def get_intraday(self, symbol: str) -> pd.DataFrame:
         """Lấy dữ liệu intraday (tick-by-tick)"""
-        quote = Quote(symbol=symbol, source="KBS")
+        quote = Quote(symbol=symbol, source=self._provider)
         return quote.intraday(symbol=symbol, page_size=10_000, show_log=False)
 
     def get_price_board(self, symbols: list[str]) -> pd.DataFrame:
@@ -145,6 +187,7 @@ class RealtimeStream:
     """WebSocket streaming realtime data từ DNSE"""
 
     def __init__(self, on_trade_callback=None, on_quote_callback=None):
+        from dnse.stream import DnseMarketStream
         self.stream = DnseMarketStream(
             api_key=Config.DNSE_API_KEY,
             api_secret=Config.DNSE_API_SECRET,

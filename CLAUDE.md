@@ -61,6 +61,7 @@ combos/cb.py             — CB Compression Breakout detection (OOP)
 combos/__init__.py       — Combo registry (get_combo by name)
 src/portfolio_manager.py — Session-aware position mgmt, adaptive exit, ATR trailing
 src/position_manager.py  — Legacy single-position manager (kept for compatibility)
+src/day_trend.py         — Day Trend Predictor (opening pulse 9:30 + retrace 9:45)
 src/dnse_auth.py         — Auto OTP via Gmail IMAP → DNSE trading token
 src/dnse_executor.py     — Real order placement via DNSE API (symbol: 41I1G6000)
 src/data_fetcher.py      — OHLCV data from vnstock/KBS
@@ -139,6 +140,58 @@ vnstock/KBS API → data_fetcher.py → scanner.py → combo.detect(df_5m)
 | Trail tighten | MFE ≥ 8pts when ATR ≥ 3.5 → trail 1.2×ATR |
 | EOD force close | 14:29 (must close before 14:30) |
 | Trading token | Valid 8h, auto-refresh at startup |
+
+## Day Trend Predictor (`src/day_trend.py`)
+
+### Overview
+
+Opening pulse (9:00-9:30) predicts day direction. Research: 680 sessions, |pulse|>3.5 pts → 79.6% HR. Dual function: bias filter for CB/NR4 + independent signal.
+
+### How It Works
+
+| Time | Action | Detail |
+|------|--------|--------|
+| 9:30 | Pulse computed | pulse = close[9:25 bar] - open[9:00 bar]. Telegram alert with historical probability |
+| 9:45 | Retrace check | max_adverse / |pulse|. Assign confidence: HIGH/MEDIUM/LOW |
+| 9:45+ | Bias filter active | Block CB/NR4 entries opposing predicted direction |
+| 9:45 | Signal (if HIGH) | Entry at 9:45 close, SL = day_open, TP = 2× pulse |
+| PM | Reversal monitor | Alert if PM creates adverse > AM at >100% retrace |
+
+### Confidence Levels
+
+| Level | Condition | Historical |
+|-------|-----------|------------|
+| HIGH | |pulse| ≥ 3.5 AND retrace < 30% | 100% continuation |
+| MEDIUM | |pulse| ≥ 3.5 AND retrace < 50% | 59% continuation |
+| LOW | otherwise | No edge (coin flip) |
+
+### DOW Adjustments
+
+- **Mon DOWN** +1 tier (70.3% P(day DOWN))
+- **Wed UP** +1 tier (73.1% P(day UP))
+- **Fri** -1 tier (weakest overall 61.2%)
+
+### Config (`strategy_config.yaml → day_trend`)
+
+```yaml
+day_trend:
+  enabled: true
+  shadow_mode: true          # SHADOW = Telegram only, no trades
+  enable_bias_filter: true   # block opposing CB/NR4 entries
+  enable_signal: true        # generate DT entry signal at 9:45
+  pulse.min_pts: 3.5
+  retracement.threshold_high_pct: 30
+  retracement.threshold_medium_pct: 50
+  signal.tp_mult: 2.0        # TP = 2× pulse magnitude
+  pm_reversal.enabled: true
+```
+
+### Status: SHADOW MODE
+
+- Default: log + Telegram alerts only, no real trades
+- Bias filter IS active (blocks opposing CB/NR4 even in shadow)
+- To enable live DT trading: set `shadow_mode: false` after validation
+- Kill criteria: if prediction accuracy < 55% over 20 days → disable
 
 ## DNSE API Details
 

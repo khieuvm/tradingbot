@@ -1,0 +1,148 @@
+[
+  {
+    "strategy": "market_structure",
+    "tf": "5m",
+    "session_filter": "ALL",
+    "direction_filter": "BUY",
+    "exit_params": {
+      "sl_mult": 2.0,
+      "trail_pts": 8.0,
+      "trail_mult": 2.0,
+      "tp_mult": null,
+      "be_trigger": null,
+      "trail_tighten_pts": null,
+      "trail_tighten_mult": null,
+      "max_hold": 25
+    },
+    "entry_filters": {},
+    "stats": {
+      "n": 366,
+      "wr": 49.18032786885246,
+      "pf": 1.273534185904407,
+      "pnl": 193.51122471723107,
+      "pnl_d": 0.2837407987056174
+    }
+  },
+  {
+    "strategy": "fibonacci",
+    "tf": "5m",
+    "session_filter": "AM",
+    "direction_filter": "SELL",
+    "exit_params": {
+      "sl_mult": 2.0,
+      "trail_pts": 8.0,
+      "trail_mult": 2.0,
+      "tp_mult": null,
+      "be_trigger": null,
+      "trail_tighten_pts": null,
+      "trail_tighten_mult": null,
+      "max_hold": 25
+    },
+    "entry_filters": {},
+    "stats": {
+      "n": 119,
+      "wr": 44.537815126050425,
+      "pf": 1.4302000171970863,
+      "pnl": 116.79412784685324,
+      "pnl_d": 0.17125238687221883
+    }
+  },
+  {
+    "strategy": "sr_horizontal",
+    "tf": "5m",
+    "session_filter": "AM",
+    "direction_filter": "SELL",
+    "exit_params": {
+      "sl_mult": 1.2,
+      "trail_pts": 8.0,
+      "trail_mult": 2.0,
+      "tp_mult": null,
+      "be_trigger": 3.0,
+      "trail_tighten_pts": null,
+      "trail_tighten_mult": null,
+      "max_hold": 20
+    },
+    "entry_filters": {
+      "adx_max": 30
+    },
+    "stats": {
+      "n": 73,
+      "wr": 42.465753424657535,
+      "pf": 1.69436520732664,
+      "pnl": 82.63706393053238,
+      "pnl_d": 0.12116871544066331
+    }
+  },
+  {
+    "strategy": "heikin_ashi",
+    "tf": "5m",
+    "session_filter": "AM",
+    "direction_filter": "SELL",
+    "exit_params": {
+      "sl_mult": 2.5,
+      "trail_pts": 8.0,
+      "trail_mult": 2.0,
+      "tp_mult": null,
+      "be_trigger": null,
+      "trail_tighten_pts": null,
+      "trail_tighten_mult": null,
+      "max_hold": 25
+    },
+    "entry_filters": {},
+    "stats": {
+      "n": 132,
+      "wr": 44.696969696969695,
+      "pf": 1.2898107009772244,
+      "pnl": 85.94839836556685,
+      "pnl_d": 0.12602404452429156
+    }
+  },
+  {
+    "strategy": "momentum_trend",
+    "tf": "1m",
+    "session_filter": "PM",
+    "direction_filter": "SELL",
+    "exit_params": {
+      "sl_mult": 2.5,
+      "trail_pts": 12.0,
+      "trail_mult": 1.0,
+      "tp_mult": null,
+      "be_trigger": null,
+      "trail_tighten_pts": null,
+      "trail_tighten_mult": null,
+      "max_hold": 50
+    },
+    "entry_filters": {},
+    "stats": {
+      "n": 192,
+      "wr": 54.6875,
+      "pf": 1.5789710073918954,
+      "pnl": 325.54002553498924,
+      "pnl_d": 0.47733141574045346
+    }
+  },
+  {
+    "strategy": "macd_cross",
+    "tf": "1m",
+    "session_filter": "AM",
+    "direction_filter": "SELL",
+    "exit_params": {
+      "sl_mult": 2.5,
+      "trail_pts": 12.0,
+      "trail_mult": 1.0,
+      "tp_mult": null,
+      "be_trigger": null,
+      "trail_tighten_pts": null,
+      "trail_tighten_mult": null,
+      "max_hold": 50
+    },
+    "entry_filters": {},
+    "stats": {
+      "n": 104,
+      "wr": 47.11538461538461,
+      "pf": 1.2136010348419233,
+      "pnl": 65.19441873172552,
+      "pnl_d": 0.09559298934270605
+    }
+  }
+]

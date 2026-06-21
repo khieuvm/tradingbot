@@ -79,13 +79,17 @@
 ## Combo Lifecycle
 
 ```
-[edge-researcher] → discover hypothesis (must fit session time window)
+[edge-researcher] → discover hypothesis (multi-strategy landscape)
        ↓
-[backtest-validator] → walk-forward + MC (with 14:28 flatten, session rules)
+[strategy-optimizer] → find best session/direction/exit
        ↓
-Grade A/B → [signal-scanner] → deploy to live scanning
+[mtf-filter-discovery] → find HTF alignment filter
        ↓
-[trade-postmortem] → monitor rolling performance (AM/PM split)
+[backtest-validator] → walk-forward + stress test + plateau check
+       ↓
+Grade A/B → [signal-combiner] → integrate into live portfolio
+       ↓
+[trade-postmortem] → monitor per-strategy attribution (AM/PM split)
        ↓
 WR < 40% over 10 trades → auto-disable 24h
        ↓
@@ -128,3 +132,48 @@ Monthly re-validation → if still F → permanent disable
 - Delta PF > 0.2 OR delta P/D > 0.2/d
 - No reduction in trade frequency (same signal count, different exits)
 - Confirm rule makes logical sense (not curve-fitting)
+
+---
+
+## Strategy Optimization Workflow
+
+**Trigger:** New strategy discovered OR monthly re-optimization OR trade count too low
+
+### Steps
+1. `strategy-optimizer` — run baseline for all active strategies
+   ```bash
+   python -m ml.scan_all_1m_combos
+   ```
+2. `mtf-filter-discovery` — find best HTF filter for each combo
+   ```bash
+   python -m ml.mtf_indicator_discovery --tf 5m
+   python -m ml.mtf_1m_with_5m
+   ```
+3. **GATE:** Filter improves PF > 0.3?
+   - **YES** -> adopt filter, proceed to validation
+   - **NO** -> use unfiltered version if profitable, or abandon
+4. `backtest-validator` — walk-forward validate filtered config
+   ```bash
+   python -m ml.strategy_filter --tf 5m
+   ```
+5. **GATE:** Grade A or B?
+   - **YES** -> add to `signal-combiner` portfolio
+   - **NO + plateau** -> escalate to `edge-researcher` for structural pivot
+   - **NO + improving** -> continue tuning exit params
+6. Update `strategy_config.yaml` with new weights and filter thresholds
+
+---
+
+## Signal Combination Workflow
+
+**Trigger:** Live trading session with multiple strategies active
+
+### Steps
+1. Each strategy fires independently via its module in `strategies/`
+2. `signal-combiner` — deduplicate, score conviction, detect contradictions
+3. **GATE:** Composite score > threshold AND no contradiction?
+   - **YES** -> enter trade from highest-weighted strategy
+   - **NO (contradiction)** -> skip both signals, log for postmortem
+   - **NO (low score)** -> skip, not enough conviction
+4. Manage position via `portfolio_manager.py` (trail, BE, session exit)
+5. `trade-postmortem` — attribute outcome to individual strategy for weight updates

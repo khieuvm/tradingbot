@@ -110,3 +110,233 @@ combo_tf_map:
   NR4:
   - 5m
   - 3m
+
+# ── Shadow Strategies (signal-only, no trade) ────────────────────────────────
+# Profitable strategies discovered in June 2026 regime (SELL-dominant, low-vol)
+# All run in shadow mode: Telegram alerts only, no order placement
+shadow_strategies:
+  enabled: true
+  strategies:
+    choch_1m:
+      tf: 1m
+      sessions: [AM, PM]
+      directions: [SELL, BUY]
+      filter: ADX > 15
+      edge: "WR 100%, PF inf, +2.66/d (n=8, 22d)"
+    momentum_1m_pm_sell:
+      tf: 1m
+      sessions: [PM]
+      directions: [SELL]
+      filter: "ADX>25, EMA8<EMA21, DI->DI+, mins>=825"
+      edge: "WR 90.9%, PF 10.84, +8.02/d (n=11, 22d)"
+    momentum_3m_am_sell:
+      tf: 3m
+      sessions: [AM]
+      directions: [SELL]
+      filter: "ADX>25, EMA8<EMA21, DI->DI+"
+      edge: "WR 73.3%, PF 2.77, +3.60/d (n=15, 22d)"
+    heikin_ashi_3m_pm_sell:
+      tf: 3m
+      sessions: [PM]
+      directions: [SELL]
+      filter: "mins>=825, 3+ green->red HA reversal"
+      edge: "WR 75%, PF 16.32, +4.06/d (n=4, MONITOR)"
+    volume_5m_pm_sell:
+      tf: 5m
+      sessions: [PM]
+      directions: [SELL]
+      filter: "vol>2xSMA20, bearish bar, range>0.5*ATR, ADX>=25"
+      edge: "WR 75%, PF 4.39, +7.67/d (n=12, 22d)"
+    confluence_5m_sell:
+      tf: 5m
+      sessions: [AM, PM]
+      directions: [SELL]
+      filter: "3+ of 22 strategies fire SELL + ADX>=20"
+      edge: "WR 72.7%, PF 3.10, +4.45/d (n=11, 22d)"
+
+# ── RAW Exit Strategies (validated on full 682d data) ────────────────────────
+# Logic: wide SL (3.0xATR), no trail, no TP, hold to session end
+# These WORK on full data because winners run to session end (avg +7-8pts)
+# while losers are capped by wide SL (avg -4pts). Win/Loss ~2.0x.
+# Currently in SHADOW mode — monitor for 2-3 weeks before live trading.
+raw_exit_strategies:
+  enabled: true
+  shadow_mode: true
+  sl_atr_mult: 3.0
+  exit: session_end
+  strategies:
+    raw_momentum_1m_pm_buy:
+      tf: 1m
+      sessions: [PM]
+      directions: [BUY]
+      regime_filter: "price > EMA50 + 0.5*ATR"
+      edge: "N=1074, WR 40.7%, PF 1.39, +1.55/d (682d)"
+    raw_momentum_1m_pm_sell:
+      tf: 1m
+      sessions: [PM]
+      directions: [SELL]
+      regime_filter: "price < EMA50 - 0.5*ATR"
+      edge: "N=489, WR 42.9%, PF 1.44, +0.76/d (682d)"
+    raw_macd_1m_pm_buy:
+      tf: 1m
+      sessions: [PM]
+      directions: [BUY]
+      regime_filter: "price > EMA50 + 0.5*ATR"
+      edge: "N=424, WR 40.6%, PF 1.30, +0.44/d (682d)"
+    raw_divergence_1m_am_sell:
+      tf: 1m
+      sessions: [AM]
+      directions: [SELL]
+      regime_filter: "price < EMA50 - 0.5*ATR"
+      edge: "N=52, WR 44.2%, PF 1.51, +0.06/d (682d)"
+
+# ── Opening Strategies (AM + PM session) ───────────────────────────────────────
+# AM: ORB Breakdown SELL (Mon+Wed), Crabel Stretch SELL (Tue+Wed)
+# PM ORB: Breakout of 13:00-13:14 opening range, weekday-filtered
+#   Mon PM: SELL (PF 6.52, WR 75%, N=4)
+#   Tue PM: BUY (PF 1.84, WR 40%, N=5)
+#   Wed PM: BUY (PF 2.30, WR 50%, N=6)
+#   Fri PM: SELL (PF 4.30, WR 33%, N=3)
+#   Thu: SKIP (all negative)
+opening_strategies:
+  enabled: true
+  shadow_mode: true
+  strategies:
+    orb_breakdown_sell:
+      tf: 1m
+      sessions: [AM]
+      directions: [SELL]
+      or_bars: 15
+      weekday_filter: [0, 2]  # Mon=0, Wed=2
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "N=10, WR 60%, PF 3.25, +1.10/d (33d)"
+    crabel_stretch_sell:
+      tf: 1m
+      sessions: [AM]
+      directions: [SELL]
+      stretch_sma: 5
+      stretch_pct: 0.5
+      weekday_filter: [1, 2]  # Tue=1, Wed=2 (100% WR both days)
+      sl: open  # stop at today's open
+      exit: session_end
+      edge: "Tue+Wed: N=5, WR 100%, PnL=+25.6 (33d)"
+    pm_orb_sell_mon:
+      tf: 1m
+      sessions: [PM]
+      directions: [SELL]
+      or_bars: 15
+      weekday_filter: [0]  # Mon
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "N=4, WR 75%, PF 6.52, +6.7pts (33d)"
+    pm_orb_buy_tue:
+      tf: 1m
+      sessions: [PM]
+      directions: [BUY]
+      or_bars: 15
+      weekday_filter: [1]  # Tue
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "N=5, WR 40%, PF 1.84, +2.4pts (33d)"
+    pm_orb_buy_wed:
+      tf: 1m
+      sessions: [PM]
+      directions: [BUY]
+      or_bars: 15
+      weekday_filter: [2]  # Wed
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "N=6, WR 50%, PF 2.30, +5.3pts (33d)"
+    pm_orb_sell_fri:
+      tf: 1m
+      sessions: [PM]
+      directions: [SELL]
+      or_bars: 15
+      weekday_filter: [4]  # Fri
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "N=3, WR 33%, PF 4.30, +5.2pts (33d)"
+
+# ── DOW-Filtered Strategies (best per weekday, 32d backtest) ─────────────────
+# Each strategy only fires on its optimal weekday(s).
+# All use raw exit: SL=3.0xATR, no trail, hold to session end.
+# Based on comprehensive day-of-week analysis (May-Jun 2026, 32 days).
+dow_strategies:
+  enabled: true
+  shadow_mode: true
+  strategies:
+    dow_momentum_am_sell_tue:
+      tf: 1m
+      sessions: [AM]
+      directions: [SELL]
+      weekday_filter: [1]  # Tue only
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "N=14, WR 64%, PF 2.31, +24.3pts (32d)"
+    dow_heikin_ashi_am_buy_fri:
+      tf: 1m
+      sessions: [AM]
+      directions: [BUY]
+      weekday_filter: [4]  # Fri only
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "N=11, WR 55%, PF 1.52, +9.5pts (32d)"
+    dow_momentum_pm_sell_monfri:
+      tf: 1m
+      sessions: [PM]
+      directions: [SELL]
+      weekday_filter: [0, 4]  # Mon+Fri
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "Mon PF2.57, Fri PF7.19, +42.0pts (32d)"
+    dow_divergence_pm_sell_mon:
+      tf: 1m
+      sessions: [PM]
+      directions: [SELL]
+      weekday_filter: [0]  # Mon only
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "N=4, WR 75%, PF 4.00, +11.9pts (32d)"
+    dow_macd_pm_buy_tuewed:
+      tf: 1m
+      sessions: [PM]
+      directions: [BUY]
+      weekday_filter: [1, 2]  # Tue+Wed
+      sl_atr_mult: 3.0
+      exit: session_end
+      edge: "Tue PF1.89, Wed PF1.56, +7.6pts (32d)"
+
+# ── Day Trend Predictor (Opening Pulse 9:00-9:30 + Retracement 9:45) ─────────
+# Research: 680 sessions, |pulse|>3.5 → HR 79.6% day direction
+# 9:45 retrace <30% → 100% continuation; <50% → 59% continuation
+# DOW: Wed UP strongest (73.1%), Mon DOWN strongest (70.3%), Fri weakest (61.2%)
+day_trend:
+  enabled: true
+  shadow_mode: true            # log + telegram only, no real trades
+  enable_bias_filter: true     # filter CB/NR4 signals against prediction
+  enable_signal: true          # generate independent DayTrend entry signal
+
+  pulse:
+    min_pts: 3.5               # minimum |pulse| for HIGH edge (79.6% HR)
+    compute_bar_hhmm: 565      # 9:25 bar close = pulse endpoint
+
+  retracement:
+    check_at_hhmm: 585         # 9:45 = retracement check time
+    threshold_high_pct: 30     # retrace < 30% → HIGH confidence (100% cont)
+    threshold_medium_pct: 50   # retrace < 50% → MEDIUM confidence (59% cont)
+
+  # DOW tier adjustments: +1 = boost confidence, -1 = penalize
+  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+  dow_adjustments:
+    0: {DOWN: 1}               # Mon DOWN strongest (70.3%)
+    2: {UP: 1}                 # Wed UP strongest (73.1%)
+    4: {UP: -1, DOWN: -1}      # Fri weakest overall (61.2%)
+
+  signal:
+    tp_mult: 2.0               # TP = 2× pulse magnitude
+    sl_mode: day_open           # SL at day open (100% retrace = 36% cont)
+
+  pm_reversal:
+    enabled: true              # monitor PM for reversal against pulse
+    alert_only: true           # only alert, don't auto-flip

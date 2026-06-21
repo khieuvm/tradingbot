@@ -1,0 +1,18 @@
+[DATA] Loading 5m from parquet cache...
+[DATA] Loaded 11937 bars, 249 trading days
+[DATA] Date range: 2025-06-13 to 2026-06-12
+
+[STRATEGIES] Loading all strategies...
+[STRATEGIES] Loaded 22 strategies
+
+  Testing: fibonacci                  220 trades | WR 27.7% | PF 0.24 | PnL/d -3.43 (9.0s)
+  Testing: sr_horizontal              145 trades | WR 27.6% | PF 0.31 | PnL/d -2.48 (7.0s)
+  Testing: dynamic_sr                 674 trades | WR 25.4% | PF 0.23 | PnL/d -5.34 (1.2s)
+  Testing: trendlines                 196 trades | WR 41.8% | PF 0.57 | PnL/d -2.00 (8.3s)
+  Testing: nbar_breakout              323 trades | WR 35.9% | PF 0.59 | PnL/d -2.07 (2.1s)
+  Testing: reversal_patterns          631 trades | WR 36.5% | PF 0.58 | PnL/d -4.73 (6.7s)
+  Testing: candlestick                283 trades | WR 31.4% | PF 0.42 | PnL/d -2.88 (2.0s)
+  Testing: harmonic                     3 trades | WR 0.0% | PF 0.00 | PnL/d -3.76 (10.2s)
+  Testing: fvg                        665 trades | WR 32.8% | PF 0.35 | PnL/d -4.12 (0.7s)
+  Testing: orderblock                  61 trades | WR 29.5% | PF 0.19 | PnL/d -2.47 (1.1s)
+  Testing: market_structure         

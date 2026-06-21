@@ -149,3 +149,36 @@ Run same strategy on all 3 TFs with TF-appropriate parameters. Report table.
 
 ### Parameter optimization
 Sweep 1-2 parameters with 3-5 values each. Report grid results sorted by P/D.
+
+### ML walk-forward validation
+Run walk-forward ML meta-labeling for any strategy/session/direction combo:
+```bash
+python -m ml.strategy_filter --tf 5m    # 5m strategies
+python -m ml.strategy_filter --tf 1m    # 1m strategies
+```
+
+### MTF filter discovery
+Find the best higher-timeframe indicator filter for a given combo:
+```bash
+python -m ml.mtf_indicator_discovery --tf 5m   # 5m signals + 15m filter
+python -m ml.mtf_1m_with_5m                    # 1m signals + 5m filter
+```
+
+### All-combos scan
+Scan all 54 strategy/session/direction combos on 1m with automatic best 5m filter:
+```bash
+python -m ml.scan_all_1m_combos
+```
+
+### Exit parameter grid sweep
+Optimize exit params (SL, trail, max_hold, BE) for any strategy:
+```bash
+python -m strategies.optimize_exits --tf 5m
+```
+
+## Multi-Strategy Context
+
+7 validated strategies beyond CB:
+- market_structure, fibonacci, sr_horizontal, heikin_ashi, reversal_patterns, momentum_trend, macd_cross
+
+Each tested across 3 sessions × 3 directions = 9 combos per strategy. Best combos have HTF filters from `skills/mtf-filter-discovery/SKILL.md`.

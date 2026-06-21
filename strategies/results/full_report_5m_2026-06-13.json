@@ -1,0 +1,161 @@
+{
+  "date": "2026-06-13",
+  "tf": "5m",
+  "n_days": 682,
+  "baseline": [],
+  "optimized": [
+    {
+      "strategy": "market_structure",
+      "exit_type": "trend",
+      "session_filter": "ALL",
+      "direction_filter": "BUY",
+      "exit_params": {
+        "sl_mult": 2.0,
+        "trail_pts": 8.0,
+        "trail_mult": 2.0,
+        "tp_mult": null,
+        "be_trigger": null,
+        "trail_tighten_pts": null,
+        "trail_tighten_mult": null,
+        "max_hold": 25
+      },
+      "is_pf": 1.273534185904407,
+      "is_pnl_d": 0.2837407987056174,
+      "oos_pf": 2.866518053107179,
+      "oos_wr": 61.206896551724135,
+      "oos_pnl_d": 4.674813688302133,
+      "oos_trades": 116
+    },
+    {
+      "strategy": "fibonacci",
+      "exit_type": "mean_reversion",
+      "session_filter": "AM",
+      "direction_filter": "SELL",
+      "exit_params": {
+        "sl_mult": 2.0,
+        "trail_pts": 8.0,
+        "trail_mult": 2.0,
+        "tp_mult": null,
+        "be_trigger": null,
+        "trail_tighten_pts": null,
+        "trail_tighten_mult": null,
+        "max_hold": 25
+      },
+      "is_pf": 1.4302000171970863,
+      "is_pnl_d": 0.17125238687221883,
+      "oos_pf": 1.4495170949399536,
+      "oos_wr": 50.0,
+      "oos_pnl_d": 1.7384423730514795,
+      "oos_trades": 38
+    },
+    {
+      "strategy": "sr_horizontal",
+      "exit_type": "mean_reversion",
+      "session_filter": "AM",
+      "direction_filter": "SELL",
+      "exit_params": {
+        "sl_mult": 1.5,
+        "trail_pts": 8.0,
+        "trail_mult": 2.0,
+        "tp_mult": null,
+        "be_trigger": null,
+        "trail_tighten_pts": null,
+        "trail_tighten_mult": null,
+        "max_hold": 25
+      },
+      "is_pf": 1.5525447876599356,
+      "is_pnl_d": 0.1667694149960139,
+      "oos_pf": 1.3082241830651904,
+      "oos_wr": 51.61290322580645,
+      "oos_pnl_d": 1.1125711184594793,
+      "oos_trades": 31
+    },
+    {
+      "strategy": "heikin_ashi",
+      "exit_type": "trend",
+      "session_filter": "AM",
+      "direction_filter": "SELL",
+      "exit_params": {
+        "sl_mult": 2.5,
+        "trail_pts": 8.0,
+        "trail_mult": 2.0,
+        "tp_mult": null,
+        "be_trigger": null,
+        "trail_tighten_pts": null,
+        "trail_tighten_mult": null,
+        "max_hold": 25
+      },
+      "is_pf": 1.2898107009772244,
+      "is_pnl_d": 0.12602404452429156,
+      "oos_pf": 1.4919620104594997,
+      "oos_wr": 51.28205128205128,
+      "oos_pnl_d": 1.364741593997008,
+      "oos_trades": 39
+    },
+    {
+      "strategy": "reversal_patterns",
+      "exit_type": "reversal",
+      "session_filter": "AM",
+      "direction_filter": "SELL",
+      "exit_params": {
+        "sl_mult": 1.5,
+        "trail_pts": 8.0,
+        "trail_mult": 2.0,
+        "tp_mult": null,
+        "be_trigger": null,
+        "trail_tighten_pts": null,
+        "trail_tighten_mult": null,
+        "max_hold": 25
+      },
+      "is_pf": 1.0395362047533758,
+      "is_pnl_d": 0.06686985440004799,
+      "oos_pf": 1.5262074844253195,
+      "oos_wr": 52.84090909090909,
+      "oos_pnl_d": 3.7242847935193653,
+      "oos_trades": 176
+    }
+  ],
+  "ml_ensemble": {
+    "config": {
+      "horizon": 6,
+      "threshold": 0.55,
+      "train_days": 60,
+      "test_days": 20
+    },
+    "results": {
+      "n_trades": 1651,
+      "wr": 45.911568746214414,
+      "pf": 0.9031709271852086,
+      "total_pnl": -393.8599999999913,
+      "pnl_per_day": -0.7187226277372104
+    },
+    "by_direction": {
+      "BUY": {
+        "n": 810,
+        "pnl": -260.5999999999991
+      },
+      "SELL": {
+        "n": 841,
+        "pnl": -133.25999999999993
+      }
+    },
+    "feature_importance": {
+      "market_structure": 0.20769046920269937,
+      "is_pm": 0.0891255243621911,
+      "session_pct": 0.08130164817454207,
+      "di_spread": 0.07153006862460046,
+      "adx": 0.05984694060570065,
+      "reversal_patterns": 0.05842095613813994,
+      "ema_align": 0.049835008303067876,
+      "rsi": 0.04090486169315297,
+      "atr": 0.03900614068682341,
+      "macd_hist": 0.03471980451707005,
+      "bb_pos": 0.030511315991710728,
+      "dynamic_sr": 0.02899404122751823,
+      "momentum_trend": 0.02828351749179426,
+      "stoch_k": 0.024777608742215212,
+      "buy_count": 0.01878752550439544
+    },
+    "n_folds": 31
+  }
+}

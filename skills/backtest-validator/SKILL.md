@@ -1,141 +1,230 @@
 ---
 name: backtest-validator
-description: Run walk-forward validation with Monte Carlo permutation testing for VN30F1M intraday CB strategies. Sessions 9:00-11:30 and 13:00-14:30 UTC+7 only — no overnight holds, all simulated trades must close by 14:28. Grades strategies A/B/C/F based on OOS performance, signal randomness test, and decay. Use when validating a new rule, checking robustness of parameter changes, or doing monthly re-validation.
+description: Validate VN30F1M intraday trading strategies with walk-forward testing, Monte Carlo permutation, stress testing, and plateau detection. Sessions 9:00-11:30 and 13:00-14:30 UTC+7 — no overnight holds, close by 14:28. Grades strategies A/B/C/F. Use when validating new rules, checking robustness of parameter changes, detecting strategy stagnation, or doing monthly re-validation.
 ---
 
 # VN30F1M Backtest Validator
 
-Robust walk-forward validation for VN30F1M intraday trading strategies.
+Robust validation with stress-testing philosophy: **find strategies that break the least, not ones that profit the most on paper.**
 
 ## Simulation Rules (Mandatory)
 
 | Rule | Implementation |
 |------|---------------|
-| Sessions only | Signals only during 9:00–11:30 / 13:00–14:30 |
+| Sessions only | Signals only during 9:00-11:30 / 13:00-14:30 |
 | No entry after 14:15 | Skip late signals |
 | Force close 14:28 | Close open position at session end |
-| Lunch break | No signals 11:30–13:00 |
+| Lunch break | No signals 11:30-13:00 |
 | Cost | **0.96 pts/trade** (slippage 0.5 + commission 0.46) |
-| AM/PM split | Always test AM and PM separately — different parameters |
-| Direction | From NEXT bar (not current bar) — see CB spec |
+| AM/PM split | Always test AM and PM separately |
+| Direction | From breakout bar (not current bar) |
 
 ## When to Use
 
 - Before deploying any new rule/filter to live trading
-- Testing parameter changes (SL multiplier, trail threshold, etc.)
-- Validating the adaptive exit rule on new data
+- Testing parameter changes (SL, trail, max_hold, HTF filter threshold)
+- After `strategy-optimizer` or `mtf-filter-discovery` produces a candidate
 - Monthly re-validation of active strategies
-- After live trading anomaly — check if something changed
+- When strategy performance appears to plateau
+- After live trading anomaly
 
 ## Core Philosophy
 
 **"OOS is truth. IS performance is a hypothesis, not a result."**
 
+**"Seek plateaus, not peaks."** A strategy that profits with stop loss anywhere from 1.5-3.0 is robust. A strategy that only works at exactly 2.13 is fragile.
+
 A strategy passes when it demonstrates:
 1. Stable OOS performance across multiple windows
-2. Statistically significant edge vs random signals (Monte Carlo)
+2. Statistical significance vs random signals (Monte Carlo p < 0.05)
 3. No decay trend over rolling windows
-4. AM and PM performance aligned (one session shouldn't be carrying the other)
+4. Robustness under stress (1.5x cost, ±1 bar entry variation)
+
+## Decision Gates
+
+### GATE: Data Availability
+- More than 100 days of data available for this TF?
+- **YES** -> Use standard rolling walk-forward (60d IS / 30d OOS)
+- **NO** (1m/3m only ~28 days) -> Use expanding-window with purged embargo. Report with caution flag.
+
+### GATE: Monte Carlo Significance
+- MC p-value < 0.05?
+- **YES** -> Edge is statistically real. Continue to stress test.
+- **NO, but PF > 1.5** -> Likely sample too small. Need more data before deployment.
+- **NO, and PF < 1.5** -> Edge is indistinguishable from random. **Abandon.**
+
+### GATE: Stress Test Survival
+- Strategy still profitable at 1.5x cost (1.44 pts) AND ±1 bar entry?
+- **YES** -> Robust. Proceed to grading.
+- **NO** -> Edge is too thin for real-world execution. Either: improve exit to widen edge, or abandon.
+
+### GATE: Plateau Detection
+- Have 3+ consecutive parameter sweeps improved PF by < 0.05?
+- **YES** -> **STOP TUNING.** This is a local optimum. Pivot structurally: try different indicator, different exit type, different timeframe, or different strategy entirely. Escalate to `edge-researcher`.
+- **NO** -> Continue optimization, there's still alpha to extract.
+
+### GATE: Grading Decision
+- OOS Grade A or B?
+- **YES** -> Deploy to production. Add to `signal-combiner` portfolio.
+- **NO (Grade C)** + plateau detected -> Escalate to `edge-researcher` for structural pivot.
+- **NO (Grade C)** + not plateau -> Continue tuning (there's room to improve).
+- **NO (Grade F)** -> Abandon this combo.
 
 ## Workflow
 
-### Step 1: Define what you're testing
-
-Be specific:
-- "Does adaptive exit (pre_ratio > 0.8) hold on recent 30 days?"
-- "Is CB 5m still valid after regime change in May?"
+### Step 1: Define Hypothesis
+Be specific and falsifiable:
+- "Does macd_cross AM/SELL with ll_5m>=1 filter maintain WR>60% OOS?"
+- "Is momentum_trend PM/SELL still profitable at 1.5x cost?"
 - NOT: "Is the strategy good?" (too vague)
 
-### Step 2: Walk-Forward Setup
+### Step 2: Walk-Forward Validation
 
-Rolling windows — 60-day IS / 30-day OOS, step 30 days:
+**Standard (>100 days data):** Rolling windows — 60d train / 30d test, step 30d:
 ```
-Window 1: IS [Day 1-60]   → OOS [Day 61-90]
-Window 2: IS [Day 31-90]  → OOS [Day 91-120]
-Window 3: IS [Day 61-120] → OOS [Day 121-150]
-~6 windows from 180 days of 5m data
+Window 1: Train [Day 1-60]   -> Test [Day 61-90]
+Window 2: Train [Day 31-90]  -> Test [Day 91-120]
+Window 3: Train [Day 61-120] -> Test [Day 121-150]
 ```
 
-For 3m/1m: only ~24 days available from API — walk-forward not viable, use full-period with caution.
-
-### Step 3: Simulation Requirements
-
+**ML Walk-Forward (from strategy_filter.py):**
 ```python
-COST = 0.96  # NOT 1.74 — corrected value
-# AM params: SL=1.2xATR, trail@5pts/2.0xATR, max_hold=24 bars
-# PM params: SL=1.0xATR, trail@4pts/2.5xATR, max_hold=12 bars
-# BE trigger: +4 pts MFE when ATR >= 3.5
-# Adaptive exit (AM): if pre_ratio > 0.8 → exit@4 (not trail)
-# Direction: nxt['close'] > row['close'] → BUY, else SELL
+TEST_DAYS = 60      # OOS test window
+STEP_DAYS = 60      # Step between folds
+EMBARGO_BARS = 14   # Purge 14 bars between train/test (no look-ahead)
+MIN_TRAIN_SIGNALS = 100
+MIN_TEST_SIGNALS = 20
 ```
 
-### Step 4: Monte Carlo Test
+### Step 3: Stress Testing
 
-100 shuffles of signal timing (preserve frequency, randomize timing):
+**Cost stress:**
+```python
+COST_STRESS = 1.44  # 1.5x normal (0.96 * 1.5)
+# Re-run all trades with stressed cost
+stressed_pnl = [raw_pnl - COST_STRESS for raw_pnl in raw_pnls]
+# Strategy must still be net-profitable
+```
+
+**Entry timing stress:**
+- Shift entry by +1 bar (simulates late fill / confirmation wait)
+- Shift entry by -1 bar (simulates early fill / aggressive entry)
+- Strategy should maintain PF > 1.0 under both shifts
+
+**Worst-window analysis:**
+- Find the worst rolling 30-day window
+- Max drawdown in that window must be < 50% of total PnL
+- If worst window has WR < 35%, investigate — regime-specific failure?
+
+### Step 4: Parameter Sensitivity
+
+Test key parameters at -20%, -10%, baseline, +10%, +20%:
+```
+SL mult:     [1.6, 1.8, 2.0, 2.2, 2.4] (baseline = 2.0)
+Trail pts:   [6.4, 7.2, 8.0, 8.8, 9.6] (baseline = 8.0)
+Max hold:    [16, 18, 20, 22, 24]        (baseline = 20)
+```
+
+**Pass criterion:** PF degrades < 30% at ±10% → parameter is in a plateau (good).
+**Fail criterion:** PF degrades > 50% at ±10% → parameter is fragile (bad).
+
+### Step 5: Monte Carlo Test
+
+100 shuffles of signal timing (preserve frequency, randomize entry positions):
 - p-value = % of random runs that beat real PnL
 - Require p < 0.05 for production deployment
+- If p = 0.06-0.10 and PF > 1.5: borderline — need more data, don't abandon yet
 
-### Step 5: AM/PM Breakdown (Required)
+### Step 6: AM/PM Breakdown (Required)
 
-Always report AM and PM separately:
+Always report separately:
 ```
-  AM: T | WR | PF | PnL/d | SL_count
-  PM: T | WR | PF | PnL/d | SL_count
+AM: Trades | WR | PF | PnL/d | SL_count | Trail% | Session_exit%
+PM: Trades | WR | PF | PnL/d | SL_count | Trail% | Session_exit%
 ```
 
-If PM is carrying AM (PM PF > 3x AM PF), investigate AM separately.
+Red flag: PM PF > 4x AM PF → PM is compensating for broken AM edge.
 
-### Step 6: Grading
+### Step 7: Grading
 
-| Grade | OOS_PF | OOS_WR | MC_p | Decay |
-|-------|--------|--------|------|-------|
-| A | > 1.5 | > 50% | < 0.03 | No |
-| B | > 1.3 | > 45% | < 0.05 | No |
-| C | > 1.1 | > 40% | < 0.10 | Mild |
-| F | < 1.0 | any | > 0.10 | Yes |
+| Grade | OOS_PF | OOS_WR | MC_p | Stress_pass | Decay |
+|-------|--------|--------|------|-------------|-------|
+| A | > 1.5 | > 55% | < 0.03 | Yes | No |
+| B | > 1.3 | > 50% | < 0.05 | Yes | No |
+| C | > 1.1 | > 45% | < 0.10 | Partial | Mild |
+| F | < 1.0 | any | > 0.10 | No | Yes |
 
-**Known baselines:**
-- CB 5m (full 129d): IS PF ~4.5, OOS 30d: PF 1.72 → Grade B (solid)
-- CB 5m with adaptive exit: +0.29/d improvement, validated on same data
+## CLI Commands
+
+```bash
+# CB trail sweep backtest (primary reference)
+python -m backtest.engine --tf 5m
+
+# Exit parameter grid sweep for any strategy
+python -m strategies.optimize_exits --tf 5m
+
+# ML walk-forward validation per strategy
+python -m ml.strategy_filter --tf 5m
+python -m ml.strategy_filter --tf 1m
+
+# MTF filter discovery (validates HTF filter value)
+python -m ml.mtf_indicator_discovery --tf 5m
+
+# Analyze rejected trades (check if filter is too aggressive)
+python -m ml.analyze_rejected --tf 5m
+```
+
+## Sample Size Requirements
+
+| Confidence | Min Trades | Use Case |
+|-----------|-----------|----------|
+| Any statistical claim | 30 | Report with caveat |
+| Deployment decision | 50 | Can deploy with monitoring |
+| High confidence | 100+ | Full confidence deployment |
+| Strategy comparison | 200+ | Reliable A/B comparison |
+
+## Red Flags
+
+- OOS PF < 50% of IS PF -> overfit
+- MC p > 0.10 -> can't distinguish from random
+- PM PF > 4x AM PF -> PM compensating for broken AM
+- Parameter sensitivity > 50% at ±10% -> fragile, not in a plateau
+- SESSION exits > 60% -> holding too long, max_hold or trail needs tightening
+- 3+ sweeps with < 0.05 PF improvement -> **PLATEAU — stop tuning, pivot**
+- Worst 30-day window has WR < 30% -> regime-dependent, needs regime filter
 
 ## Output Format
 
 ```
-BACKTEST REPORT — CB 5m — 2026-06-04
-══════════════════════════════════════
-Config: 3-bar compression, ATR 2.5-4.5, adaptive exit pre_ratio>0.8
-Data: 129 trading days, cost 0.96/trade
+BACKTEST REPORT — [Strategy] [TF] [Session/Dir] — YYYY-MM-DD
+================================================================
+Config: [detection rule, filters, exit params]
+Data: [N] trading days, cost 0.96/trade
 
 FULL PERIOD:
-  223 trades | WR 67.7% | PF 4.87 | +818.2 pts | +6.34/d
+  [N] trades | WR [X]% | PF [X] | +[X] pts | +[X]/d
 
-AM vs PM:
-  AM: 142 | WR 66.2% | PF 4.20 | +453.3 | adapt_exits=21
-  PM:  81 | WR 70.4% | PF 6.23 | +364.8
+STRESS TEST:
+  1.5x cost:   PF [X] (pass/fail)
+  +1 bar entry: PF [X] (pass/fail)
+  Worst 30d:   [X] trades, WR [X]%, PnL [X]
 
-ADAPTIVE EXIT:
-  Targets: 31 AM trades (pre_ratio>0.8)
-  Exited@4pts: 21 | Avg PnL: +5.16 | Avg MFE: 6.5
-  Missed 4pts (went to SL): 10
+PARAMETER SENSITIVITY:
+  SL mult ±10%:  PF [X]-[X] (stable/fragile)
+  Trail pts ±10%: PF [X]-[X] (stable/fragile)
 
-OOS (last 30d): 30 trades | WR 50.0% | PF 1.72 → Grade B
-MC p-value: < 0.05 ✓
+OOS (last [N]d): [N] trades | WR [X]% | PF [X] -> Grade [A/B/C/F]
+MC p-value: [X] (pass/fail)
 
-Verdict: Deploy. Apply adaptive exit rule to live sim_day.py.
+Verdict: Deploy / Refine / Escalate / Abandon
 ```
-
-## Red Flags
-
-- OOS PF < 50% of IS PF → likely overfit
-- MC p > 0.10 → can't distinguish from random
-- PM PF > 4x AM PF → PM is compensating for broken AM edge
-- MFE 0-2 WR > 30% → signal is firing on wrong direction too often
-- Adapt exits hitting < 40% of targeted trades → threshold may be too high
-- **SESSION exits > 80%** → trail never activates, holding too long without direction
 
 ## Resources
 
-- `bt_trail_sweep.py` — CB trail activation parameter sweep (primary backtest reference)
-- `bt_adaptive_3tf.py` — Adaptive exit backtest on 1m/3m/5m
-- `debug_3m.py` / `debug_1m.py` — TF-specific deep analysis
-- `strategy_config.yaml` — CB risk params and config
+- `backtest/engine.py` — CB backtest engine (trail sweep, simulation)
+- `strategies/optimize_exits.py` — Exit parameter grid sweep + simulate_trade_fast
+- `ml/strategy_filter.py` — Walk-forward ML validation with purged embargo
+- `ml/analyze_rejected.py` — Analyze what the filter misses
+- `strategy_config.yaml` — Production parameters
+- `skills/strategy-optimizer/SKILL.md` — Parent optimization workflow
+- `skills/edge-researcher/SKILL.md` — Escalation target when plateau detected
