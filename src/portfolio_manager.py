@@ -183,7 +183,8 @@ class PortfolioManager:
 
     def open_position(self, symbol: str, direction: int, entry_price: float,
                       atr: float, combo: str, timeframe: str,
-                      confidence: int = 0, pre_move_ratio: float = 0.0):
+                      confidence: int = 0, pre_move_ratio: float = 0.0,
+                      session_forecast: dict = None):
         """Open a new position in the portfolio with session-aware SL."""
         if not self.can_open(direction):
             return None
@@ -216,6 +217,8 @@ class PortfolioManager:
             "tp1_hit": False,
             "bars_held": 0,
         }
+        if session_forecast and session_forecast.get("is_trend_day"):
+            pos["max_hold_mult"] = session_forecast.get("trend_day_hold_mult", 1.5)
         self.positions.append(pos)
         self.current_direction = direction
 
@@ -318,6 +321,8 @@ class PortfolioManager:
 
             # --- Max hold (time-based, matches backtest: max_hold_bars × 5 min per bar) ---
             max_hold_bars = session_params["max_hold_bars"]
+            if pos.get("max_hold_mult"):
+                max_hold_bars = int(max_hold_bars * pos["max_hold_mult"])
             try:
                 opened_dt = datetime.strptime(
                     pos["opened_at"], "%Y-%m-%d %H:%M:%S"

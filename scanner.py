@@ -555,6 +555,12 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                       f"(bias={pred['action'] if pred else 'N/A'}, conf={pred['confidence'] if pred else 'N/A'})")
                 continue
 
+            # Range day filter — skip entries when predicted range too small
+            if day_trend and day_trend.should_skip_range_day():
+                forecast = day_trend.get_session_forecast()
+                print(f"  [DAY_TREND] Range day filter: predicted ~{forecast['predicted_range']:.0f} pts — skipping {combo_name}")
+                continue
+
             if portfolio_mgr.should_flip(direction_int, "5m", 1):
                 portfolio_mgr.execute_flip(current_price)
 
@@ -612,6 +618,7 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                     (not _in_am_dt and 13 * 60 <= _mins_dt < 14 * 60 + 15)
                 )
                 if _dt_entry_ok and portfolio_mgr.can_open(dt_signal["direction"]):
+                    _dt_forecast = day_trend.get_session_forecast()
                     portfolio_mgr.open_position(
                         symbol=SYMBOL,
                         direction=dt_signal["direction"],
@@ -621,6 +628,7 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                         timeframe="5m",
                         confidence=2,
                         pre_move_ratio=0.0,
+                        session_forecast=_dt_forecast,
                     )
                 elif not _dt_entry_ok:
                     print(f"  [DAY_TREND] Time cutoff — no entry after {'11:25' if _in_am_dt else '14:15'}")

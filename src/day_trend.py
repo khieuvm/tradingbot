@@ -41,6 +41,37 @@ HIST_SIZE_PROB = {
 # Overall stats (unused currently, kept for reference)
 SIZE_THRESHOLDS = (1.4, 3.5)
 
+# ── Session Extreme Prediction (from predict_session_extremes.py, 680 days) ──
+# Fitted: predicted_extreme = pulse_close + alpha × pulse_pts
+ALPHA_UPSIDE = 1.47    # HIGH extends this much beyond pulse close (UP days)
+ALPHA_DOWNSIDE = 1.32  # LOW extends this much below pulse close (DN days)
+
+# Avg AM range by pulse bucket
+HIST_RANGE = {
+    "SMALL": 10.6,     # |pulse| < 1.4
+    "MEDIUM": 11.8,    # 1.4 - 3.5
+    "LARGE": 21.5,     # > 3.5
+}
+
+# P(session extreme in pulse direction forms AFTER 9:45)
+HIST_EXTREME_TIMING = {
+    ("UP", "SHALLOW"):   0.714,   # retrace < 30%
+    ("UP", "NORMAL"):    0.642,   # retrace 30-50%
+    ("UP", "DEEP"):      0.474,   # retrace > 50%
+    ("DOWN", "SHALLOW"): 0.734,
+    ("DOWN", "NORMAL"):  0.732,
+    ("DOWN", "DEEP"):    0.459,
+}
+
+# DOW multiplier on extreme timing probability
+DOW_EXTREME_TIMING = {
+    0: 1.00,   # Mon: average
+    1: 1.05,   # Tue: strongest continuation
+    2: 0.95,   # Wed: average
+    3: 1.10,   # Thu: strongest for DOWN
+    4: 0.75,   # Fri: fade early (weakest)
+}
+
 
 class DayTrendPredictor:
 
@@ -68,6 +99,13 @@ class DayTrendPredictor:
         pm_cfg = cfg.get("pm_reversal", {})
         self.pm_reversal_enabled = pm_cfg.get("enabled", True)
 
+        fc_cfg = cfg.get("session_forecast", {})
+        self.forecast_enabled = fc_cfg.get("enabled", True)
+        self.range_skip_threshold = fc_cfg.get("range_skip_threshold", 6.0)
+        self.trend_day_hold_mult = fc_cfg.get("trend_day_hold_mult", 1.5)
+        self.alpha_up = fc_cfg.get("level_alpha_up", ALPHA_UPSIDE)
+        self.alpha_down = fc_cfg.get("level_alpha_down", ALPHA_DOWNSIDE)
+
         self.notifier = notifier
         self._log_path = Path("logs/day_trend_shadow.jsonl")
 
@@ -86,6 +124,13 @@ class DayTrendPredictor:
         self._pm_alert_sent = False
         self._entry_price = 0.0
         self._am_max_adverse = 0.0
+        # Session forecast state
+        self._predicted_am_high = 0.0
+        self._predicted_am_low = 0.0
+        self._predicted_range = 0.0
+        self._extreme_after_945_prob = 0.0
+        self._yesterday_range = 0.0
+        self._gap = 0.0
 
     def reset(self):
         self._reset_state()
@@ -176,6 +221,8 @@ class DayTrendPredictor:
         self._state = "PREDICTION_ACTIVE"
 
         self._entry_price = float(post_pulse_bars[-1]["close"])
+        self._compute_yesterday_stats(df_5m)
+        self._predict_session_extremes(current_time)
         self._send_retrace_alert(current_time)
 
     def _calc_base_confidence(self) -> str:
@@ -199,6 +246,82 @@ class DayTrendPredictor:
         idx = tiers.index(base)
         new_idx = max(0, min(2, idx + adj))
         return tiers[new_idx]
+
+    def _compute_yesterday_stats(self, df_5m: pd.DataFrame):
+        today_str = self._today_date
+        all_dates = sorted(df_5m["time"].astype(str).str[:10].unique())
+        today_idx = -1
+        for i, d in enumerate(all_dates):
+            if d == today_str:
+                today_idx = i
+                break
+        if today_idx <= 0:
+            return
+        yesterday_str = all_dates[today_idx - 1]
+        yd_bars = df_5m[df_5m["time"].astype(str).str.startswith(yesterday_str)]
+        if len(yd_bars) > 0:
+            self._yesterday_range = float(yd_bars["high"].max() - yd_bars["low"].min())
+            yd_close = float(yd_bars.iloc[-1]["close"])
+            self._gap = self._day_open - yd_close
+
+    def _predict_session_extremes(self, current_time: datetime):
+        if not self.forecast_enabled or self._pulse_direction == 0:
+            return
+
+        if self._pulse_direction == 1:
+            self._predicted_am_high = self._pulse_close + self.alpha_up * self._pulse_pts
+            self._predicted_am_low = self._day_open
+        else:
+            self._predicted_am_low = self._pulse_close + self.alpha_down * self._pulse_pts
+            self._predicted_am_high = self._day_open
+
+        bucket = self._get_size_bucket()
+        base_range = HIST_RANGE.get(bucket, 12.0)
+        if self._yesterday_range > 0:
+            range_mult = min(1.5, max(0.7, self._yesterday_range / 14.0))
+            self._predicted_range = base_range * range_mult
+        else:
+            self._predicted_range = base_range
+
+        dir_str = "UP" if self._pulse_direction == 1 else "DOWN"
+        if self._retrace_pct < 30:
+            zone = "SHALLOW"
+        elif self._retrace_pct < 50:
+            zone = "NORMAL"
+        else:
+            zone = "DEEP"
+
+        base_prob = HIST_EXTREME_TIMING.get((dir_str, zone), 0.50)
+        dow_mult = DOW_EXTREME_TIMING.get(current_time.weekday(), 1.0)
+        self._extreme_after_945_prob = min(0.95, base_prob * dow_mult)
+
+    def get_session_forecast(self) -> dict | None:
+        if self._state != "PREDICTION_ACTIVE":
+            return None
+        if not self.forecast_enabled:
+            return None
+        return {
+            "predicted_am_high": self._predicted_am_high,
+            "predicted_am_low": self._predicted_am_low,
+            "predicted_range": self._predicted_range,
+            "extreme_continues_prob": self._extreme_after_945_prob,
+            "is_trend_day": self._extreme_after_945_prob > 0.65,
+            "is_range_day": self._predicted_range > 0 and self._predicted_range < self.range_skip_threshold,
+            "pulse_direction": self._pulse_direction,
+            "confidence": self._confidence,
+            "yesterday_range": self._yesterday_range,
+            "gap": self._gap,
+            "trend_day_hold_mult": self.trend_day_hold_mult,
+        }
+
+    def should_skip_range_day(self) -> bool:
+        if not self.enabled or not self.forecast_enabled:
+            return False
+        if self._state != "PREDICTION_ACTIVE":
+            return False
+        if self._predicted_range <= 0:
+            return False
+        return self._predicted_range < self.range_skip_threshold and self._confidence != "HIGH"
 
     def get_prediction(self) -> dict | None:
         if self._state != "PREDICTION_ACTIVE":
@@ -435,6 +558,26 @@ class DayTrendPredictor:
                 f"  Entry: {entry:.1f} | SL: {sl:.1f} | TP: {tp:.1f}"
             )
 
+        forecast_line = ""
+        if self.forecast_enabled and self._predicted_range > 0:
+            forecast_line = (
+                f"\n\n\U0001f4ca <b>Session Forecast:</b>\n"
+                f"  Range: ~{self._predicted_range:.0f} pts\n"
+                f"  Est. HIGH: {self._predicted_am_high:.1f}\n"
+                f"  Est. LOW: {self._predicted_am_low:.1f}\n"
+                f"  P(extreme after 9:45): {self._extreme_after_945_prob*100:.0f}%\n"
+            )
+            if self._extreme_after_945_prob > 0.65:
+                forecast_line += f"  \u2192 <b>TREND DAY</b> — hold positions longer\n"
+            elif self._predicted_range < self.range_skip_threshold:
+                forecast_line += f"  \u2192 <b>RANGE DAY</b> — tight targets, avoid entries\n"
+            else:
+                forecast_line += f"  \u2192 Normal day\n"
+            if abs(self._gap) > 2.0:
+                forecast_line += f"  Gap: {self._gap:+.1f} pts"
+            if self._yesterday_range > 0:
+                forecast_line += f"\n  Yesterday range: {self._yesterday_range:.0f} pts"
+
         msg = (
             f"{conf_icon} <b>[DayTrend] 9:45 Confirmation</b>\n"
             f"{'─' * 24}\n"
@@ -445,6 +588,7 @@ class DayTrendPredictor:
             f"{verdict}\n"
             f"Bias: <b>{action}</b>"
             f"{signal_line}"
+            f"{forecast_line}"
         )
         self.notifier.send(msg)
 

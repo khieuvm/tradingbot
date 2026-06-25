@@ -340,3 +340,12 @@ day_trend:
   pm_reversal:
     enabled: true              # monitor PM for reversal against pulse
     alert_only: true           # only alert, don't auto-flip
+
+  # Session extreme prediction (from predict_session_extremes.py, 680d OOS verified)
+  # Predicts AM high/low levels, range, and extreme timing after 9:45
+  session_forecast:
+    enabled: true
+    range_skip_threshold: 8.5    # Skip CB entries if predicted range < 8.5 pts (min achievable: 7.42)
+    trend_day_hold_mult: 1.5     # Extend max_hold by 1.5x on trend days
+    level_alpha_up: 1.47         # High = pulse_close + 1.47 × pulse_pts
+    level_alpha_down: 1.32       # Low = pulse_close - 1.32 × |pulse_pts|
