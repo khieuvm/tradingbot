@@ -1,4 +1,4 @@
-active_combo: CB
+active_combo: none
 symbol: VN30F1M
 market_open: 09:00
 market_close: '14:30'
@@ -6,7 +6,10 @@ scan_interval: 10
 
 # CB: Compression Breakout (3-bar squeeze < 0.7xATR)
 # Validated: 130d, WR 74.7%, PF 5.13, +6.69 pts/day (optimized exit 2026-06-06)
-# Improvements: excl weak AM slots, PM ATR 2.0-5.0, optimized trail/SL/BE
+# Hyperopt (26d, 2880 combos):
+#   Best: comp=0.9, ATR 2.5-4.0, RSI<65, hold=6 → WR 56%, Net +3.40, PF 5.96
+#   Alt:  comp=0.7, ATR 2.0-4.0, hold=8 → WR 73%, Net +3.09, PF 4.54
+#   Current live: comp=0.7, ATR 2.5-4.5, RSI<70 → Net +1.37 (baseline)
 # Cost: 0.96 pts/trade (slippage 0.5 + commission 0.46)
 
 # ── Per-combo detection params (single source of truth) ───────────────────────
@@ -311,6 +314,147 @@ dow_strategies:
 # Research: 680 sessions, |pulse|>3.5 → HR 79.6% day direction
 # 9:45 retrace <30% → 100% continuation; <50% → 59% continuation
 # DOW: Wed UP strongest (73.1%), Mon DOWN strongest (70.3%), Fri weakest (61.2%)
+
+# ── Safe BUY Signal (price action, trap avoidance) ───────────────────────────
+# OR breakout + higher low + prev session down + no wick rejection
+# Research (682 days):
+#   safe_buy_v2: WR 74.3% (6M), PF 4.46, n=35 (IMPROVING trend)
+#   robust: WR 58.9% (6M), PF 2.28, n=73 (more frequent)
+# Entry: after S1+S2 complete (9:15-9:45), exit TP=+10, SL=S1_low/-1.5×ATR
+safe_buy:
+  enabled: true
+  shadow_mode: true              # shadow = alerts only, no trades
+  variant: v2                    # "v2" (strict, WR 74%) or "robust" (WR 59%, more trades)
+  tp_pts: 10.0                   # target +10 pts (BIG BUY)
+  sl_atr_mult: 1.5               # SL = min(S1_low, entry - 1.5×ATR)
+  trail_trigger_pts: 5.0         # trail activate at +5 pts
+  trail_atr_mult: 2.0            # trail distance = 2.0×ATR
+
+# ── S/R Breakout + Volume (support/resistance breakout & rejection) ──────────
+# Monitors PDH/PDL/PDC, Opening Range, Day Open for breakout/rejection + volume
+# Research (26 days, 329 events):
+#   S6: AM Wick Reject at resistance → SHORT: WR 85.7%, PF 18.24 (n=14)
+#   S3: Break UP + HiVol→HiVol → LONG: WR 77.8%, PF 9.20 (n=9)
+#   S9: Break DN + Vol≥1.5x → SHORT: WR 75.0%, PF 37.67 (n=8)
+#   Key: HiVol→HiVol = real breakout, HiVol→LoVol = fake
+#   Key: AM = rejection territory, PM = breakout territory
+sr_breakout:
+  enabled: true
+  shadow_mode: true              # shadow = alerts only, no trades
+  vol_surge_mult: 1.2            # volume ≥ 1.2x avg = "above average"
+  vol_spike_mult: 1.5            # volume ≥ 1.5x avg = "surge"
+  wick_min_pct: 0.50             # upper/lower wick ≥ 50% of range = rejection
+  # StochRSI extreme exit signals
+  # Research: Exit OB(>80) after 3-5 bars → SHORT WR 83.3%, Net +3.56
+  #           Exit OS(<10) after 3-5 bars → LONG WR 73.3%, Net +3.49
+  stochrsi_ob: 80                # overbought threshold
+  stochrsi_os: 10                # oversold threshold (asymmetric — 10 not 20)
+  stochrsi_dur_min: 3            # min bars in extreme zone
+  stochrsi_dur_max: 10           # max bars (too long = no edge)
+
+# ── ORB (Opening Range Breakout) — PM Only ──────────────────────────────────
+# Hyperopt (26d, 3840 combos): OR=6 bars (30min), PM only
+#   Best:    WR 83%, Net +8.44, PF 29.2 (n=6, vol≥1.2x)
+#   Robust:  WR 70%, Net +5.11, PF 6.78 (n=10, no vol filter)
+# Key: ALL top configs are PM + OR=6 + hold=8. AM ORB does not work.
+orb:
+  enabled: true
+  shadow_mode: true
+  or_bars: 6                     # 30 min opening range
+  buffer: 0.3                    # breakout buffer (pts above/below OR)
+  hold_bars: 8                   # exit after 8 bars (40 min)
+  sl_mult: 0.7                   # SL = 0.7 × OR range (tight)
+  vol_min: 0.8                   # min volume ratio at breakout bar
+  session: PM                    # PM only (hyperopt result)
+
+# ── Session Momentum — 45-min Pulse Continuation (SELL) ─────────────────────
+# Hyperopt (26d, 1350 combos): After 45min, if session drops ≥0.3×ATR → SELL
+#   Quality: pulse>0.3 + SK≥60, hold=8 → WR 86%, Net +6.70, PF 36.7 (n=7)
+#   Frequency: pulse>0.3, no SK, hold=6 → WR 67%, Net +3.84, PF 7.46 (n=21)
+# Key: 100% of top-20 configs are SELL. BUY momentum does NOT work.
+session_momentum:
+  enabled: true
+  shadow_mode: true
+  or_period: 9                   # 9 bars = 45 min opening period
+  pulse_threshold: 0.3           # min |pulse/ATR| to trigger
+  sk_min: 60                     # StochRSI > 60 for SELL (not oversold)
+  hold_bars: 8                   # hold 8 bars (40 min) after entry
+  direction: SELL                # SELL only (hyperopt)
+
+# ── Fibonacci Retracement Signals ────────────────────────────────────────────
+# Validated on VN30 Index 205 days (proxy for VN30F1M)
+# 3 sub-strategies, all shadow mode:
+#   1. Fib+EMA (PM): EMA aligned + Fib 23.6% retrace → entry, N=28, Net=+3.33, PF=2.56
+#   2. Session Fib (AM SELL): 4-bar OR → bounce to Fib 78.6% → SELL, N=129, +0.68/day
+#   3. Fib Momentum (SELL): RSI drops 70→65 at Fib 38.2% → SELL, N=10, WR=80%, PF=5.19
+fibonacci:
+  enabled: true
+  shadow_mode: true
+  fib_ema:
+    enabled: true
+    lookback: 10                 # bars to find recent swing
+    fib_level: 0.236             # shallow retracement = strong trend
+    hold_bars: 6                 # 30 min hold
+    sl_mult: 0.8                 # SL = 0.8×ATR
+    tp_mult: 5.0                 # TP = 5.0×ATR (wide target)
+    session: PM                  # PM only (best edge)
+    tolerance: 0.3               # max ATR fraction from fib level
+  session_fib:
+    enabled: true
+    or_bars: 4                   # first 4 bars = 20 min Opening Range
+    fib_level: 0.786             # deep bounce within OR
+    hold_bars: 15                # 75 min hold (rest of session)
+    sl_mult: 1.0                 # SL = 1.0×OR range
+    tp_extension: 1.272          # TP = Fib ext 127.2% of OR
+    session: AM                  # AM only (best)
+    direction: SELL              # SELL only
+    min_or_range: 1.5            # min OR range in points
+  fib_momentum:
+    enabled: true
+    lookback: 5
+    fib_level: 0.382             # price near Fib 38.2% resistance
+    rsi_from: 70                 # RSI was above 70
+    rsi_to: 65                   # RSI now below 65 (dropping)
+    hold_bars: 8                 # 40 min hold
+    sl_mult: 1.2                 # SL = 1.2×ATR
+    tp_mult: 2.0                 # TP = 2.0×ATR
+
+# ── Intraday Bias Tracker (5 checkpoints throughout the day) ─────────────────
+# Tracks F1M own momentum at slot transitions, updates directional bias dynamically
+# Research (682 days):
+#   CP2 (9:45): S1+S2 strong (>3pts) → rest of day WR 69% (1Y)
+#   CP3 (10:30): S1+S2+S3 all same dir → S4+PM WR 65-70%
+#   AM→PM: ~50/50 (no edge), PM direction only from PM open itself
+#   Day high/low forms in S6 (PM body) ~40% of time
+intraday_bias:
+  enabled: true
+  shadow_mode: true              # shadow = alerts + filter, no direct trades
+  strong_move_pts: 3.0           # |cum return| > 3pts = strong signal
+  # Checkpoints: automatically at 9:15, 9:45, 10:30, 13:00, 13:30
+
+# ── VN30 Gap Breadth Signal (9:05 check) ─────────────────────────────────────
+# Research: ≥5/10 VN30 stocks gap DN <-0.5% → VN30F1M SHORT same-day
+# 6M: WR 72.7%, PF 3.01, +10.17 pts after cost (n=11, IMPROVING)
+# 1Y: WR 67.7%, PF 2.74, +8.60 after cost (n=31)
+# Gap UP signals degraded → only SHORT bias used
+# Volume does NOT improve signal (counterintuitive)
+gap_breadth:
+  enabled: true
+  shadow_mode: true              # shadow = Telegram alerts + bias filter, no trades
+  gap_threshold_dn: -0.5         # gap < -0.5% counts as gap DN
+  min_stocks_dn: 5               # ≥5/10 stocks gap DN → SHORT bias
+  stocks:
+    - VIC
+    - VHM
+    - VNM
+    - HPG
+    - MSN
+    - VCB
+    - BID
+    - CTG
+    - TCB
+    - FPT
+
 day_trend:
   enabled: true
   shadow_mode: true            # log + telegram only, no real trades

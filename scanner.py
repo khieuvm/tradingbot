@@ -43,6 +43,13 @@ except Exception:
 from ml.model import MLFilter
 from ml.standalone_model import StandaloneMLSignal
 from src.day_trend import DayTrendPredictor
+from src.gap_breadth import GapBreadthSignal
+from src.intraday_bias import IntradayBiasTracker
+from src.safe_buy import SafeBuySignal
+from src.sr_breakout import SRBreakoutSignal
+from src.orb_breakout import ORBSignal
+from src.session_momentum import SessionMomentumSignal
+from src.fibonacci_signal import FibSignal
 from strategies.shadow_scanner import StrategyShadowScanner
 from strategies.shadow_tracker import ShadowTracker
 
@@ -243,7 +250,14 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
              shadow_scanner: StrategyShadowScanner | None = None,
              shadow_tracker: ShadowTracker | None = None,
              stream: DnseStream | None = None,
-             day_trend: DayTrendPredictor | None = None):
+             day_trend: DayTrendPredictor | None = None,
+             gap_breadth: GapBreadthSignal | None = None,
+             intraday_bias: IntradayBiasTracker | None = None,
+             safe_buy: SafeBuySignal | None = None,
+             sr_breakout: SRBreakoutSignal | None = None,
+             orb: ORBSignal | None = None,
+             session_momentum: SessionMomentumSignal | None = None,
+             fib_signal: FibSignal | None = None):
     """One CB scan cycle: detect compression, queue pending, confirm on breakout, enter."""
     global _last_regime, _cb_last_signal_time, _nr4_last_signal_time
 
@@ -327,6 +341,14 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
     volatile = regime_info["regime"] == "VOLATILE"
     if volatile:
         print(f"  [REGIME] VOLATILE — skip CB entries")
+
+    # --- Gap Breadth Check (9:05, once per day) ---
+    if gap_breadth:
+        gap_breadth.check(fetcher, vn_now())
+
+    # --- Intraday Bias Tracker (5 checkpoints throughout the day) ---
+    if intraday_bias:
+        intraday_bias.update(df_5m, vn_now())
 
     # --- Day Trend Predictor update (9:30 pulse + 9:45 retracement) ---
     if day_trend:
@@ -548,6 +570,22 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
                 if not ml_result["should_enter"]:
                     continue
 
+            # Gap Breadth bias filter (block BUY when ≥5 stocks gap DN)
+            if gap_breadth and gap_breadth.should_filter(direction_int):
+                details = gap_breadth.get_details()
+                print(f"  [GAP_BREADTH] {combo_name}/{direction} blocked "
+                      f"({details['n_gap_dn']} stocks gap DN, bias=SHORT)")
+                continue
+
+            # Intraday Bias filter (block entries opposing strong intraday momentum)
+            if intraday_bias and intraday_bias.should_filter(direction_int):
+                state = intraday_bias.get_state()
+                bias_dir = 'LONG' if state['bias'] == 1 else 'SHORT'
+                print(f"  [INTRADAY] {combo_name}/{direction} blocked "
+                      f"(bias={bias_dir}, strength={state['strength']:.0%}, "
+                      f"cp={state['checkpoint']})")
+                continue
+
             # Day Trend bias filter (block entries opposing predicted direction)
             if day_trend and day_trend.should_filter(direction_int):
                 pred = day_trend.get_prediction()
@@ -699,6 +737,154 @@ def run_scan(fetcher: DataFetcher, notifier: TelegramNotifier, sent_alerts: dict
         except Exception as e:
             print(f"  [SHADOW] Error: {e}")
 
+    # --- Safe BUY Signal (price action: OR breakout + higher low + trap avoidance) ---
+    if safe_buy and df_5m is not None and not volatile:
+        try:
+            sb_signal = safe_buy.check(df_5m, vn_now())
+            if sb_signal:
+                if safe_buy.shadow_mode:
+                    pass  # already sent Telegram in check()
+                elif portfolio_mgr and portfolio_mgr.can_open(1):
+                    _now_sb = vn_now()
+                    _mins_sb = _now_sb.hour * 60 + _now_sb.minute
+                    _in_am_sb = _mins_sb < 11 * 60 + 30
+                    _sb_entry_ok = (
+                        (_in_am_sb and _mins_sb < 11 * 60 + 25) or
+                        (not _in_am_sb and 13 * 60 <= _mins_sb < 14 * 60 + 15)
+                    )
+                    if _sb_entry_ok:
+                        portfolio_mgr.open_position(
+                            symbol=SYMBOL,
+                            direction=1,
+                            entry_price=sb_signal["entry"],
+                            atr=sb_signal["atr"],
+                            combo="SAFE_BUY",
+                            timeframe="5m",
+                            confidence=2,
+                            pre_move_ratio=0.0,
+                        )
+        except Exception as e:
+            print(f"  [SAFE_BUY] Error: {e}")
+
+    # --- ORB (Opening Range Breakout — PM session) ---
+    if orb and df_5m is not None:
+        try:
+            orb_signals = orb.check(df_5m, vn_now())
+            for orb_sig in orb_signals:
+                alert_key = f"ORB_{orb_sig['label']}_{orb_sig['time']}"
+                if alert_key not in sent_alerts:
+                    sent_alerts[alert_key] = time.time()
+                    any_signal = True
+                    if not orb.shadow_mode and portfolio_mgr and portfolio_mgr.can_open(orb_sig['direction']):
+                        _now_orb = vn_now()
+                        _mins_orb = _now_orb.hour * 60 + _now_orb.minute
+                        if 13 * 60 <= _mins_orb < 14 * 60 + 15:
+                            portfolio_mgr.open_position(
+                                symbol=SYMBOL,
+                                direction=orb_sig['direction'],
+                                entry_price=orb_sig['entry'],
+                                atr=orb_sig.get('or_range', 3.0),
+                                combo='ORB',
+                                timeframe='5m',
+                                confidence=1,
+                                pre_move_ratio=0.0,
+                            )
+        except Exception as e:
+            print(f"  [ORB] Error: {e}")
+
+    # --- Session Momentum (45-min pulse continuation) ---
+    if session_momentum and df_5m is not None:
+        try:
+            sm_signals = session_momentum.check(df_5m, vn_now())
+            for sm_sig in sm_signals:
+                alert_key = f"SM_{sm_sig['label']}_{sm_sig['time']}"
+                if alert_key not in sent_alerts:
+                    sent_alerts[alert_key] = time.time()
+                    any_signal = True
+                    if not session_momentum.shadow_mode and portfolio_mgr and portfolio_mgr.can_open(sm_sig['direction']):
+                        _now_sm = vn_now()
+                        _mins_sm = _now_sm.hour * 60 + _now_sm.minute
+                        _in_am_sm = _mins_sm < 11 * 60 + 30
+                        _sm_entry_ok = (
+                            (_in_am_sm and _mins_sm < 11 * 60 + 25) or
+                            (not _in_am_sm and 13 * 60 <= _mins_sm < 14 * 60 + 15)
+                        )
+                        if _sm_entry_ok:
+                            portfolio_mgr.open_position(
+                                symbol=SYMBOL,
+                                direction=sm_sig['direction'],
+                                entry_price=sm_sig['entry'],
+                                atr=sm_sig['atr'],
+                                combo='SESS_MOM',
+                                timeframe='5m',
+                                confidence=1,
+                                pre_move_ratio=sm_sig.get('pulse_atr', 0),
+                            )
+        except Exception as e:
+            print(f"  [SESS_MOM] Error: {e}")
+
+    # --- S/R Breakout + Volume (wick rejection, volume breakout/breakdown) ---
+    if sr_breakout and df_5m is not None:
+        try:
+            sr_signals = sr_breakout.check(df_5m, vn_now())
+            for sr_sig in sr_signals:
+                alert_key = f"SR_{sr_sig['label']}_{sr_sig['time']}"
+                if alert_key not in sent_alerts:
+                    sent_alerts[alert_key] = time.time()
+                    any_signal = True
+                    if not sr_breakout.shadow_mode and portfolio_mgr and portfolio_mgr.can_open(1):
+                        _now_sr = vn_now()
+                        _mins_sr = _now_sr.hour * 60 + _now_sr.minute
+                        _in_am_sr = _mins_sr < 11 * 60 + 30
+                        _sr_entry_ok = (
+                            (_in_am_sr and _mins_sr < 11 * 60 + 25) or
+                            (not _in_am_sr and 13 * 60 <= _mins_sr < 14 * 60 + 15)
+                        )
+                        if _sr_entry_ok:
+                            portfolio_mgr.open_position(
+                                symbol=SYMBOL,
+                                direction=sr_sig["direction"],
+                                entry_price=sr_sig["entry"],
+                                atr=float(df_5m["high"].tail(14).values.astype(float).mean() - df_5m["low"].tail(14).values.astype(float).mean()),
+                                combo=f"SR_{sr_sig['type']}",
+                                timeframe="5m",
+                                confidence=sr_sig.get("quality", 1),
+                                pre_move_ratio=0.0,
+                            )
+        except Exception as e:
+            print(f"  [SR] Error: {e}")
+
+    # --- Fibonacci Retracement Signals ---
+    if fib_signal and df_5m is not None:
+        try:
+            fib_signals = fib_signal.check(df_5m, vn_now())
+            for fib_sig in fib_signals:
+                alert_key = f"FIB_{fib_sig['sub_type']}_{fib_sig['direction_str']}_{fib_sig['session']}"
+                if alert_key not in sent_alerts:
+                    sent_alerts[alert_key] = time.time()
+                    any_signal = True
+                    if not fib_signal.shadow_mode and portfolio_mgr and portfolio_mgr.can_open(fib_sig['direction']):
+                        _now_fib = vn_now()
+                        _mins_fib = _now_fib.hour * 60 + _now_fib.minute
+                        _in_am_fib = _mins_fib < 11 * 60 + 30
+                        _fib_entry_ok = (
+                            (_in_am_fib and _mins_fib < 11 * 60 + 25) or
+                            (not _in_am_fib and 13 * 60 <= _mins_fib < 14 * 60 + 15)
+                        )
+                        if _fib_entry_ok:
+                            portfolio_mgr.open_position(
+                                symbol=SYMBOL,
+                                direction=fib_sig['direction'],
+                                entry_price=fib_sig['entry'],
+                                atr=fib_sig.get('atr', 3.0),
+                                combo=f"FIB_{fib_sig['sub_type']}",
+                                timeframe='5m',
+                                confidence=1,
+                                pre_move_ratio=0.0,
+                            )
+        except Exception as e:
+            print(f"  [FIB] Error: {e}")
+
     if not any_signal and not pending_signals:
         status = portfolio_mgr.status_str() if portfolio_mgr else "N/A"
         print(f"  No signal. Portfolio: {status}")
@@ -812,6 +998,87 @@ def main():
         print(f"[ML-Standalone] Active ({mode_str}), thr={standalone_ml.threshold:.2f}, "
               f"filter={standalone_ml.session_filter}+{standalone_ml.direction_filter}")
 
+    # --- Gap Breadth Signal (VN30 stocks gap → F1M bias) ---
+    gap_breadth = None
+    gb_cfg = get_config().get("gap_breadth", {})
+    if gb_cfg.get("enabled"):
+        gap_breadth = GapBreadthSignal(notifier=notifier)
+        mode_str = "SHADOW" if gap_breadth.shadow_mode else "LIVE"
+        print(f"[GAP_BREADTH] Active ({mode_str}), "
+              f"threshold={gap_breadth.gap_threshold_dn}%, "
+              f"min_stocks={gap_breadth.min_stocks_dn}, "
+              f"stocks={len(gap_breadth.stocks)}")
+
+    # --- Intraday Bias Tracker (5 checkpoints: 9:15, 9:45, 10:30, 13:00, 13:30) ---
+    intraday_bias = None
+    ib_cfg = get_config().get("intraday_bias", {})
+    if ib_cfg.get("enabled"):
+        intraday_bias = IntradayBiasTracker(notifier=notifier)
+        mode_str = "SHADOW" if intraday_bias.shadow_mode else "LIVE"
+        print(f"[INTRADAY] Active ({mode_str}), "
+              f"strong_move={intraday_bias.strong_move_pts}pts, "
+              f"5 checkpoints (9:15/9:45/10:30/13:00/13:30)")
+
+    # --- Safe BUY Signal (OR breakout + higher low + trap avoidance) ---
+    safe_buy = None
+    sb_cfg = get_config().get("safe_buy", {})
+    if sb_cfg.get("enabled"):
+        safe_buy = SafeBuySignal(notifier=notifier)
+        mode_str = "SHADOW" if safe_buy.shadow_mode else "LIVE"
+        print(f"[SAFE_BUY] Active ({mode_str}), variant={safe_buy.variant}, "
+              f"TP={safe_buy.tp_pts}pts")
+
+    # --- S/R Breakout + Volume (resistance/support breakout & rejection) ---
+    sr_breakout = None
+    sr_cfg = get_config().get("sr_breakout", {})
+    if sr_cfg.get("enabled"):
+        sr_breakout = SRBreakoutSignal(notifier=notifier)
+        mode_str = "SHADOW" if sr_breakout.shadow_mode else "LIVE"
+        print(f"[SR_BREAKOUT] Active ({mode_str}), "
+              f"vol_surge={sr_breakout.vol_surge}x, "
+              f"vol_spike={sr_breakout.vol_spike}x, "
+              f"wick_min={sr_breakout.wick_min_pct*100:.0f}%")
+
+    # --- ORB (Opening Range Breakout — PM session) ---
+    orb = None
+    orb_cfg = get_config().get("orb", {})
+    if orb_cfg.get("enabled"):
+        orb = ORBSignal(notifier=notifier)
+        mode_str = "SHADOW" if orb.shadow_mode else "LIVE"
+        print(f"[ORB] Active ({mode_str}), "
+              f"OR={orb.or_bars} bars ({orb.or_bars*5}min), "
+              f"buf={orb.buffer}, hold={orb.hold_bars}, "
+              f"SL={orb.sl_mult}xOR, vol>={orb.vol_min}, "
+              f"session={orb.session_filter}")
+
+    # --- Session Momentum (45-min pulse continuation) ---
+    session_momentum = None
+    sm_cfg = get_config().get("session_momentum", {})
+    if sm_cfg.get("enabled"):
+        session_momentum = SessionMomentumSignal(notifier=notifier)
+        mode_str = "SHADOW" if session_momentum.shadow_mode else "LIVE"
+        print(f"[SESS_MOM] Active ({mode_str}), "
+              f"opening={session_momentum.or_period*5}min, "
+              f"pulse>{session_momentum.pulse_threshold}xATR, "
+              f"SK>={session_momentum.sk_min}, "
+              f"hold={session_momentum.hold_bars}, "
+              f"dir={session_momentum.direction_filter}")
+
+    # --- Fibonacci Retracement Signals ---
+    fib_signal = None
+    fib_cfg = get_config().get("fibonacci", {})
+    if fib_cfg.get("enabled"):
+        fib_signal = FibSignal(notifier=notifier)
+        mode_str = "SHADOW" if fib_signal.shadow_mode else "LIVE"
+        subs = []
+        if fib_signal.ema_enabled:
+            subs.append(f"FibEMA({fib_signal.ema_session})")
+        if fib_signal.zone_enabled:
+            subs.append(f"SessFib({fib_signal.zone_session} {fib_signal.zone_direction})")
+        if fib_signal.mom_enabled:
+            subs.append("FibMom(SELL)")
+        print(f"[FIBONACCI] Active ({mode_str}), strategies: {', '.join(subs)}")
+
     # --- Day Trend Predictor (Opening Pulse 9:00-9:30 + Retracement 9:45) ---
     dt_cfg = get_config().get("day_trend", {})
     day_trend = None
@@ -827,10 +1094,16 @@ def main():
     try:
         shadow_scanner = StrategyShadowScanner()
         shadow_tracker = ShadowTracker()
+        _n_1m = len(getattr(shadow_scanner, "_strategies_1m", []))
+        _n_3m = len(getattr(shadow_scanner, "_strategies_3m", []))
+        _n_5m = len(getattr(shadow_scanner, "_strategies_5m", []))
+        _n_open = len(getattr(shadow_scanner, "_opening_strategies", []))
+        _n_total = _n_1m + _n_3m + _n_5m + _n_open + 1  # +1 confluence bucket
         print(f"[SHADOW] Strategy scanner active: "
-              f"{len(shadow_scanner._strategies_1m)} x 1m, "
-              f"{len(shadow_scanner._strategies_3m)} x 3m, "
-              f"{len(shadow_scanner._strategies_5m)} x 5m + confluence")
+              f"{_n_1m} x 1m, "
+              f"{_n_3m} x 3m, "
+              f"{_n_5m} x 5m, "
+              f"{_n_open} opening + confluence (total={_n_total})")
         if shadow_tracker.pending_count > 0:
             print(f"[SHADOW] Tracker: {shadow_tracker.pending_count} pending signals from today")
     except Exception as e:
@@ -871,7 +1144,11 @@ def main():
                  portfolio_mgr=portfolio_manager, pending_signals=pending_signals,
                  ml_filter=ml_filter, standalone_ml=standalone_ml,
                  shadow_scanner=shadow_scanner, shadow_tracker=shadow_tracker,
-                 stream=stream, day_trend=day_trend)
+                 stream=stream, day_trend=day_trend, gap_breadth=gap_breadth,
+                 intraday_bias=intraday_bias, safe_buy=safe_buy,
+                 sr_breakout=sr_breakout, orb=orb,
+                 session_momentum=session_momentum,
+                 fib_signal=fib_signal)
         return
 
     notifier.send(
@@ -913,6 +1190,20 @@ def main():
                     print(f"[EOD] Shadow tracker report sent")
                 if day_trend:
                     day_trend.reset()
+                if gap_breadth:
+                    gap_breadth.reset()
+                if intraday_bias:
+                    intraday_bias.reset()
+                if safe_buy:
+                    safe_buy.reset()
+                if sr_breakout:
+                    sr_breakout.reset()
+                if orb:
+                    orb.reset()
+                if session_momentum:
+                    session_momentum.reset()
+                if fib_signal:
+                    fib_signal.reset()
 
             if not is_trading_hours():
                 print(f"\r[{now.strftime('%H:%M:%S')}] Outside trading hours.", end="")
@@ -981,7 +1272,11 @@ def main():
                          portfolio_mgr=portfolio_manager, pending_signals=pending_signals,
                          ml_filter=ml_filter, standalone_ml=standalone_ml,
                          shadow_scanner=shadow_scanner, shadow_tracker=shadow_tracker,
-                         stream=stream, day_trend=day_trend)
+                         stream=stream, day_trend=day_trend, gap_breadth=gap_breadth,
+                         intraday_bias=intraday_bias, safe_buy=safe_buy,
+                         sr_breakout=sr_breakout, orb=orb,
+                         session_momentum=session_momentum,
+                         fib_signal=fib_signal)
 
         except KeyboardInterrupt:
             print("\nStopped by user.")
